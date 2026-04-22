@@ -295,8 +295,8 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] bg-natural-bg text-natural-ink font-sans selection:bg-natural-highlight flex flex-col transition-colors duration-300 overflow-x-hidden">
       {/* Salutation du haut */}
-      <div className="w-full text-center py-4 bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 flex items-center justify-between px-6 safe-p-top">
-        <div className="flex-1 flex justify-start items-center gap-2">
+      <div className="w-full text-center py-4 bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 relative flex items-center justify-center px-6 safe-p-top">
+        <div className="absolute left-6 flex items-center gap-2">
           {profile?.firstName && (
             <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
               Bonjour {profile.firstName}
@@ -304,7 +304,7 @@ export default function App() {
           )}
         </div>
         <span className="text-xl font-serif text-natural-accent/60 italic tracking-widest">بالصحة و الراحة</span>
-        <div className="flex-1 flex justify-end">
+        <div className="absolute right-6 flex items-center">
           <button 
             onClick={() => setDarkMode(!darkMode)}
             className="p-2 rounded-full hover:bg-stone-100 dark:hover:bg-white/5 transition-all text-stone-600 dark:text-stone-400"
@@ -790,7 +790,7 @@ export default function App() {
       </div>
       <footer className="w-full text-center py-10 opacity-40">
         <p className="font-serif italic text-sm tracking-widest">
-          powered by <span className="font-bold uppercase not-italic text-natural-accent">EL BOUZZAOUI</span>
+          Powered by <span className="font-bold uppercase not-italic text-natural-accent">EL BOUZZAOUI</span>
         </p>
       </footer>
     </div>
