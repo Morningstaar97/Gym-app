@@ -27,3 +27,20 @@
   --text-primary: #e2e3dd;
   --accent: #a3b899;
 }
+
+html, body {
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.min-h-screen {
+  min-h: 100dvh;
+}
+
+/* Padding pour iPhone avec encoche */
+.safe-p-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-p-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}

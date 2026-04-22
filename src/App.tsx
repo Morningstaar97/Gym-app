@@ -21,7 +21,8 @@ import {
   ExternalLink,
   History,
   Sun,
-  Moon
+  Trash2,
+  Trash
 } from 'lucide-react';
 
 type Goal = 'perdrePoids' | 'prendreMuscle' | 'gagnerForce';
@@ -31,6 +32,7 @@ type Equipment = 'maison' | 'typique' | 'professionnel';
 type Gender = 'homme' | 'femme';
 
 interface UserData {
+  firstName: string; // Nouveau: prénom
   age: string;
   gender: Gender; // Nouveau: genre
   focus: string;
@@ -96,6 +98,7 @@ export default function App() {
   
   // Charger le profil depuis le localStorage
   const [profile, setProfile] = useState<{
+    firstName: string;
     age: string;
     gender: Gender;
     experience: Experience;
@@ -108,6 +111,7 @@ export default function App() {
   });
 
   const [formData, setFormData] = useState<UserData>({
+    firstName: profile?.firstName || '',
     age: profile?.age || '',
     gender: profile?.gender || 'homme',
     experience: profile?.experience || 'débutant',
@@ -152,11 +156,12 @@ export default function App() {
   const generateWorkout = async () => {
     // Si le profil n'est pas complet, on le sauvegarde d'abord
     if (!profile || showProfileEdit) {
-      if (!formData.age || !formData.gender) {
+      if (!formData.firstName || !formData.age || !formData.gender) {
         setError('Veuillez compléter votre profil.');
         return;
       }
       const newProfile = {
+        firstName: formData.firstName,
         age: formData.age,
         gender: formData.gender,
         experience: formData.experience,
@@ -261,16 +266,31 @@ export default function App() {
     setWorkout(null);
   };
 
+  const deleteExercise = (index: number) => {
+    if (!workout) return;
+    const updatedExercises = workout.exercises.filter((_, i) => i !== index);
+    const updatedWorkout = { ...workout, exercises: updatedExercises };
+    setWorkout(updatedWorkout);
+    // Si la séance est déjà dans l'historique, on la met à jour
+    setHistory(prev => prev.map(h => h.id === workout.id ? updatedWorkout : h));
+  };
+
   const deleteFromHistory = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setHistory(prev => prev.filter(w => w.id !== id));
   };
 
   return (
-    <div className="min-h-screen bg-natural-bg text-natural-ink font-sans selection:bg-natural-highlight flex flex-col transition-colors duration-300">
+    <div className="min-h-[100dvh] bg-natural-bg text-natural-ink font-sans selection:bg-natural-highlight flex flex-col transition-colors duration-300 overflow-x-hidden">
       {/* Salutation du haut */}
-      <div className="w-full text-center py-4 bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 flex items-center justify-between px-6">
-        <div className="flex-1" />
+      <div className="w-full text-center py-4 bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 flex items-center justify-between px-6 safe-p-top">
+        <div className="flex-1 flex justify-start items-center gap-2">
+          {profile?.firstName && (
+            <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
+              Bonjour, bonjour {profile.firstName}
+            </span>
+          )}
+        </div>
         <span className="text-xl font-serif text-natural-accent/60 italic tracking-widest">بالصحة و الراحة</span>
         <div className="flex-1 flex justify-end">
           <button 
@@ -335,23 +355,34 @@ export default function App() {
                       <div className="space-y-10">
                         <section>
                           <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Profil</label>
-                          <div className="flex flex-wrap gap-4">
-                            <div className="flex-1 min-w-[80px] group">
+                          <div className="flex flex-col gap-4">
+                            <div className="group w-full">
                               <input
-                                type="number"
-                                name="age"
-                                value={formData.age}
+                                type="text"
+                                name="firstName"
+                                value={formData.firstName}
                                 onChange={handleInputChange}
-                                placeholder="Âge"
-                                className="w-full bg-natural-subtle border-b-2 border-stone-100 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300"
+                                placeholder="Votre prénom"
+                                className="w-full bg-natural-subtle border-b-2 border-stone-100 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300 font-medium"
                               />
                             </div>
-                            <div className="w-full flex bg-stone-50 p-1 rounded-2xl gap-1">
+                            <div className="flex flex-wrap gap-4">
+                              <div className="flex-1 min-w-[80px] group">
+                                <input
+                                  type="number"
+                                  name="age"
+                                  value={formData.age}
+                                  onChange={handleInputChange}
+                                  placeholder="Âge"
+                                  className="w-full bg-natural-subtle border-b-2 border-stone-100 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300"
+                                />
+                              </div>
+                              <div className="w-full flex bg-stone-50 p-1 rounded-2xl gap-1">
                               {(['homme', 'femme'] as const).map((g) => (
                                 <button
                                   key={g}
                                   onClick={() => setFormData(prev => ({ ...prev, gender: g }))}
-                                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                                  className={`flex-1 min-h-[44px] py-3 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
                                     formData.gender === g 
                                       ? 'bg-white text-natural-accent shadow-sm' 
                                       : 'text-stone-400 hover:text-stone-600'
@@ -362,10 +393,11 @@ export default function App() {
                               ))}
                             </div>
                           </div>
-                        </section>
+                        </div>
+                      </section>
 
-                        <section>
-                          <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Environnement</label>
+                      <section>
+                        <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Environnement</label>
                           <div className="grid grid-cols-1 gap-2">
                             {[
                               { id: 'maison', label: 'À la maison', icon: '🏠' },
@@ -469,7 +501,7 @@ export default function App() {
                                 <button
                                   key={level}
                                   onClick={() => setFormData(prev => ({ ...prev, intensity: level }))}
-                                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                                  className={`flex-1 min-h-[44px] py-3 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
                                     formData.intensity === level 
                                       ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-white shadow-sm' 
                                       : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
@@ -546,7 +578,7 @@ export default function App() {
                   <p className="text-stone-500 text-lg leading-relaxed font-serif italic italic-small">"{workout?.description}"</p>
                 </header>
 
-                <div className="grid grid-cols-2 gap-6 mb-12">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mb-12">
                   <div className="bg-natural-subtle dark:bg-white/5 p-6 rounded-[30px] border border-stone-100 dark:border-white/5">
                     <div className="flex items-center gap-2 text-stone-400 mb-2">
                       <Clock className="w-4 h-4" />
@@ -589,6 +621,13 @@ export default function App() {
                                 </h4>
                                 
                                 <div className="flex flex-wrap items-center gap-3 shrink-0">
+                                  <button
+                                    onClick={() => deleteExercise(i)}
+                                    className="p-2 text-stone-300 hover:text-red-500 transition-colors"
+                                    title="Supprimer l'exercice"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
                                   {/* Dock Vidéo/Image */}
                                   <div className="flex bg-natural-subtle dark:bg-white/5 p-1 rounded-xl border border-stone-100 dark:border-white/5 gap-1 shadow-sm">
                                     {ex.youtubeUrl && (
@@ -723,9 +762,9 @@ export default function App() {
                           </div>
                           <button 
                             onClick={(e) => deleteFromHistory(h.id, e)}
-                            className="p-2 text-stone-300 hover:text-red-400 transition-colors"
+                            className="p-2 text-stone-400 hover:text-red-500 transition-colors"
                           >
-                            <Target className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
