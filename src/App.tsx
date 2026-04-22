@@ -250,7 +250,17 @@ export default function App() {
       setStep('workout');
     } catch (err) {
       console.error(err);
-      setError(err instanceof Error ? err.message : 'Erreur lors de la génération. Veuillez réessayer.');
+      let message = 'Erreur lors de la génération. Veuillez réessayer.';
+      if (err instanceof Error) {
+        if (err.message.includes('503') || err.message.includes('high demand')) {
+          message = 'Les serveurs de l\'IA sont surchargés. Réessayez dans quelques secondes !';
+        } else if (err.message.includes('API key')) {
+          message = 'Problème de configuration (Clé API).';
+        } else {
+          message = err.message;
+        }
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }

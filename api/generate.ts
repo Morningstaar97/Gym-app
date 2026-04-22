@@ -15,7 +15,7 @@ export default async function handler(req: any, res: any) {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-1.5-flash-latest",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -24,7 +24,7 @@ export default async function handler(req: any, res: any) {
 
     const text = response.text;
     if (!text) {
-      throw new Error("L'IA n'a pas renvoyé de texte.");
+      throw new Error("L'IA n'a pas pu générer de réponse pour le moment.");
     }
     
     // Nettoyage robuste du JSON
