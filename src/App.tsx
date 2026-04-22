@@ -250,7 +250,7 @@ export default function App() {
       setStep('workout');
     } catch (err) {
       console.error(err);
-      setError('Erreur lors de la génération. Veuillez réessayer.');
+      setError(err instanceof Error ? err.message : 'Erreur lors de la génération. Veuillez réessayer.');
     } finally {
       setLoading(false);
     }
