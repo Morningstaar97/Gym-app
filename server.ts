@@ -57,6 +57,10 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Serveur démarré sur http://localhost:${PORT}`);
-});
+export default app;
+
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Serveur démarré sur http://localhost:${PORT}`);
+  });
+}
