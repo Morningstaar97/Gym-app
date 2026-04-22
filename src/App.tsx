@@ -295,23 +295,29 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] bg-natural-bg text-natural-ink font-sans selection:bg-natural-highlight flex flex-col transition-colors duration-300 overflow-x-hidden">
       {/* Salutation du haut */}
-      <div className="w-full text-center py-4 bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 relative flex items-center justify-center px-6 safe-p-top">
-        <div className="absolute left-6 flex items-center gap-2">
-          {profile?.firstName && (
-            <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
-              Bonjour {profile.firstName}
-            </span>
-          )}
-        </div>
-        <span className="text-xl font-serif text-natural-accent/60 italic tracking-widest">بالصحة و الراحة</span>
-        <div className="absolute right-6 flex items-center">
-          <button 
-            onClick={() => setDarkMode(!darkMode)}
-            className="p-2 rounded-full hover:bg-stone-100 dark:hover:bg-white/5 transition-all text-stone-600 dark:text-stone-400"
-            title={darkMode ? "Mode Jour" : "Mode Nuit"}
-          >
-            {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-          </button>
+      <div className="w-full bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 safe-p-top">
+        <div className="max-w-4xl mx-auto px-6 py-4 grid grid-cols-3 items-center">
+          <div className="flex justify-start overflow-hidden">
+            {profile?.firstName && (
+              <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
+                Bonjour {profile.firstName}
+              </span>
+            )}
+          </div>
+          
+          <div className="flex justify-center whitespace-nowrap">
+            <span className="text-lg sm:text-xl font-serif text-natural-accent/60 italic tracking-widest">بالصحة و الراحة</span>
+          </div>
+
+          <div className="flex justify-end">
+            <button 
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2 rounded-full hover:bg-stone-100 dark:hover:bg-white/5 transition-all text-stone-600 dark:text-stone-400"
+              title={darkMode ? "Mode Jour" : "Mode Nuit"}
+            >
+              {darkMode ? <Sun className="w-4 h-4 sm:w-5 h-5" /> : <Moon className="w-4 h-4 sm:w-5 h-5" />}
+            </button>
+          </div>
         </div>
       </div>
 
