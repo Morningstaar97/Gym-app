@@ -14,19 +14,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        responseMimeType: "application/json",
+      }
+    });
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
     
-    // Nettoyage du JSON si nécessaire
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const cleanJson = jsonMatch ? jsonMatch[0] : text;
+    // Nettoyage robuste du JSON
+    let cleanJson = text.trim();
+    if (cleanJson.startsWith('```json')) {
+      cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
+    } else if (cleanJson.startsWith('```')) {
+      cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
+    }
     
-    res.status(200).json(JSON.parse(cleanJson));
+    // Sécurité supplémentaire : extraire uniquement ce qui est entre { et }
+    const firstBrace = cleanJson.indexOf('{');
+    const lastBrace = cleanJson.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
+    }
+    
+    try {
+      const parsedData = JSON.parse(cleanJson);
+      res.status(200).json(parsedData);
+    } catch (parseError) {
+      console.error("JSON Parse Error. Content:", cleanJson);
+      res.status(500).json({ error: "L'IA a généré une réponse malformée. Veuillez réessayer." });
+    }
   } catch (error) {
     console.error("Erreur API Gemini:", error);
-    res.status(500).json({ error: "Erreur lors de la génération du programme." });
+    const message = error instanceof Error ? error.message : "Erreur inconnue";
+    res.status(500).json({ error: `Erreur serveur: ${message}` });
   }
 }

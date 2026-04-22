@@ -234,11 +234,12 @@ export default function App() {
         body: JSON.stringify({ prompt }),
       });
 
+      const data = await res.json();
+
       if (!res.ok) {
-        throw new Error('Erreur lors de la communication avec le serveur.');
+        throw new Error(data.error || 'Erreur lors de la communication avec le serveur.');
       }
 
-      const data = await res.json();
       const newWorkout: WorkoutPlan = {
         ...data,
         id: crypto.randomUUID(),
