@@ -21,6 +21,7 @@ import {
   ExternalLink,
   History,
   Sun,
+  Moon,
   Trash2,
   Trash
 } from 'lucide-react';
