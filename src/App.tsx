@@ -75,6 +75,7 @@ const MUSCLE_GROUPS = [
 export default function App() {
   const [step, setStep] = useState<'info' | 'workout' | 'history'>('info'); // Nouveau: étape historique
   const [loading, setLoading] = useState(false);
+  const [loadingAlternative, setLoadingAlternative] = useState<number | null>(null);
   const [workout, setWorkout] = useState<WorkoutPlan | null>(null);
   const [history, setHistory] = useState<WorkoutPlan[]>(() => {
     const saved = localStorage.getItem('fitfocus_history');
@@ -134,6 +135,28 @@ export default function App() {
       localStorage.setItem('fitfocus_profile', JSON.stringify(profile));
     }
   }, [profile]);
+
+  // Sauvegarder automatiquement les champs du profil dans localStorage en temps réel
+  useEffect(() => {
+    const profileToSave = {
+      firstName: formData.firstName,
+      age: formData.age,
+      gender: formData.gender,
+      experience: formData.experience,
+      equipment: formData.equipment,
+      goal: formData.goal,
+      focus: formData.focus
+    };
+    localStorage.setItem('fitfocus_profile', JSON.stringify(profileToSave));
+  }, [
+    formData.firstName, 
+    formData.age, 
+    formData.gender, 
+    formData.experience, 
+    formData.equipment, 
+    formData.goal, 
+    formData.focus
+  ]);
 
   // Sauvegarder l'historique quand il change
   useEffect(() => {
@@ -285,6 +308,57 @@ export default function App() {
     setWorkout(updatedWorkout);
     // Si la séance est déjà dans l'historique, on la met à jour
     setHistory(prev => prev.map(h => h.id === workout.id ? updatedWorkout : h));
+  };
+
+  const getAlternative = async (index: number) => {
+    if (!workout || loadingAlternative !== null) return;
+    const exercise = workout.exercises[index];
+    
+    setLoadingAlternative(index);
+    try {
+      const prompt = `
+        Tu es un coach de fitness professionnel. L'utilisateur ne peut pas faire l'exercice suivant : "${exercise.name}".
+        Propose un exercice ALTERNATIF qui travaille les mêmes muscles, adapté au niveau "${formData.experience}" et à l'équipement "${formData.equipment}".
+        
+        Paramètres du profil :
+        - Genre : ${formData.gender}
+        - Âge : ${formData.age}
+        - Équipement disponible : ${formData.equipment}
+
+        Réponds UNIQUEMENT avec un objet JSON au format suivant :
+        {
+          "name": "Nom du nouvel exercice", 
+          "sets": "${exercise.sets}", 
+          "reps": "${exercise.reps}", 
+          "notes": "astuce courte",
+          "form": "Explication de la forme correcte",
+          "modifications": "Adaptations",
+          "youtubeUrl": "lien youtube",
+          "googleImageUrl": "lien google images"
+        }
+      `;
+
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      const updatedExercises = [...workout.exercises];
+      updatedExercises[index] = data;
+      const updatedWorkout = { ...workout, exercises: updatedExercises };
+      
+      setWorkout(updatedWorkout);
+      setHistory(prev => prev.map(h => h.id === workout.id ? updatedWorkout : h));
+    } catch (err) {
+      console.error(err);
+      setError("Impossible de générer une alternative. Réessayez.");
+    } finally {
+      setLoadingAlternative(null);
+    }
   };
 
   const deleteFromHistory = (id: string, e: React.MouseEvent) => {
@@ -646,6 +720,21 @@ export default function App() {
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
+
+                                  <button
+                                    onClick={() => getAlternative(i)}
+                                    disabled={loadingAlternative !== null}
+                                    className="px-3 py-1.5 bg-stone-50 dark:bg-white/5 border border-stone-100 dark:border-white/5 rounded-xl text-[8px] font-bold uppercase tracking-widest text-stone-400 hover:text-natural-accent hover:border-natural-accent transition-all flex items-center gap-2 group/alt"
+                                    title="Trouver une alternative"
+                                  >
+                                    {loadingAlternative === i ? (
+                                      <Loader2 className="w-3 h-3 animate-spin text-natural-accent" />
+                                    ) : (
+                                      <Zap className="w-3 h-3 text-stone-300 group-hover/alt:text-natural-accent transition-colors" />
+                                    )}
+                                    <span>Alternative</span>
+                                  </button>
+
                                   {/* Dock Vidéo/Image */}
                                   <div className="flex bg-natural-subtle dark:bg-white/5 p-1 rounded-xl border border-stone-100 dark:border-white/5 gap-1 shadow-sm">
                                     {ex.youtubeUrl && (
