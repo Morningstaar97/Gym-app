@@ -23,10 +23,6 @@ import {
   Sun,
   Moon
 } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
-
-// Initialize Gemini API
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 type Goal = 'perdrePoids' | 'prendreMuscle' | 'gagnerForce';
 type Intensity = 'faible' | 'modérée' | 'élevée';
@@ -224,15 +220,19 @@ export default function App() {
         Réponds UNIQUEMENT avec le JSON.
       `;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json"
-        }
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt }),
       });
 
-      const data = JSON.parse(response.text || '{}');
+      if (!res.ok) {
+        throw new Error('Erreur lors de la communication avec le serveur.');
+      }
+
+      const data = await res.json();
       const newWorkout: WorkoutPlan = {
         ...data,
         id: crypto.randomUUID(),
