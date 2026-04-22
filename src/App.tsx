@@ -299,7 +299,7 @@ export default function App() {
         <div className="flex-1 flex justify-start items-center gap-2">
           {profile?.firstName && (
             <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
-              Bonjour, bonjour {profile.firstName}
+              Bonjour {profile.firstName}
             </span>
           )}
         </div>
