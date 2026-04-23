@@ -708,7 +708,7 @@ export default function App() {
                             <div className="flex flex-col gap-6">
                               {/* Header: Titre et Actions */}
                               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                                <h4 className="font-serif font-medium text-2xl text-natural-ink leading-tight flex-grow max-w-full sm:max-w-[60%]">
+                                <h4 className="font-serif font-bold text-2xl text-black dark:text-white leading-tight flex-grow max-w-full sm:max-w-[60%] tracking-tight">
                                   {ex.name}
                                 </h4>
                                 
@@ -724,13 +724,13 @@ export default function App() {
                                   <button
                                     onClick={() => getAlternative(i)}
                                     disabled={loadingAlternative !== null}
-                                    className="px-3 py-1.5 bg-stone-50 dark:bg-white/5 border border-stone-100 dark:border-white/5 rounded-xl text-[8px] font-bold uppercase tracking-widest text-stone-400 hover:text-natural-accent hover:border-natural-accent transition-all flex items-center gap-2 group/alt"
+                                    className="px-4 py-2 bg-natural-accent/10 dark:bg-natural-accent/20 border border-natural-accent/30 dark:border-natural-accent/40 rounded-xl text-[9px] font-bold uppercase tracking-widest text-natural-accent hover:bg-natural-accent hover:text-white transition-all flex items-center gap-2 group/alt shadow-sm"
                                     title="Trouver une alternative"
                                   >
                                     {loadingAlternative === i ? (
-                                      <Loader2 className="w-3 h-3 animate-spin text-natural-accent" />
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                     ) : (
-                                      <Zap className="w-3 h-3 text-stone-300 group-hover/alt:text-natural-accent transition-colors" />
+                                      <Zap className="w-3.5 h-3.5 fill-current" />
                                     )}
                                     <span>Alternative</span>
                                   </button>
@@ -763,13 +763,13 @@ export default function App() {
 
                                   {/* Badges de stats - Harmonisation de la largeur */}
                                   <div className="flex gap-2">
-                                    <div className="bg-natural-highlight/30 dark:bg-natural-highlight/5 px-3 py-1.5 rounded-xl text-center min-w-[64px] border border-natural-accent/10 dark:border-white/5 shadow-sm">
-                                      <span className="block text-[7px] font-bold uppercase tracking-tighter text-stone-400 dark:text-stone-500 mb-0.5">Séries</span>
-                                      <span className="font-bold text-natural-accent dark:text-natural-highlight text-sm leading-none">{ex.sets}</span>
+                                    <div className="bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-xl text-center min-w-[64px] border border-blue-100 dark:border-blue-800 shadow-sm">
+                                      <span className="block text-[7px] font-bold uppercase tracking-tighter text-blue-400/80 dark:text-blue-400 mb-0.5">Séries</span>
+                                      <span className="font-bold text-blue-700 dark:text-blue-200 text-sm leading-none">{ex.sets}</span>
                                     </div>
-                                    <div className="bg-natural-highlight/30 dark:bg-natural-highlight/5 px-3 py-1.5 rounded-xl text-center min-w-[64px] border border-natural-accent/10 dark:border-white/5 shadow-sm">
-                                      <span className="block text-[7px] font-bold uppercase tracking-tighter text-stone-400 dark:text-stone-500 mb-0.5">Reps</span>
-                                      <span className="font-bold text-natural-accent dark:text-natural-highlight text-sm leading-none">{ex.reps}</span>
+                                    <div className="bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-xl text-center min-w-[64px] border border-blue-100 dark:border-blue-800 shadow-sm">
+                                      <span className="block text-[7px] font-bold uppercase tracking-tighter text-blue-400/80 dark:text-blue-400 mb-0.5">Reps</span>
+                                      <span className="font-bold text-blue-700 dark:text-blue-200 text-sm leading-none">{ex.reps}</span>
                                     </div>
                                   </div>
                                 </div>
