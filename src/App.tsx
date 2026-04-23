@@ -78,13 +78,13 @@ export default function App() {
   const [loadingAlternative, setLoadingAlternative] = useState<number | null>(null);
   const [workout, setWorkout] = useState<WorkoutPlan | null>(null);
   const [history, setHistory] = useState<WorkoutPlan[]>(() => {
-    const saved = localStorage.getItem('fitfocus_history');
+    const saved = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
     return saved ? JSON.parse(saved) : [];
   });
   const [error, setError] = useState<string | null>(null);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('fitfocus_darkmode');
+    const saved = localStorage.getItem('repz_darkmode') || localStorage.getItem('fitfocus_darkmode');
     return saved === 'true';
   });
   
@@ -95,7 +95,7 @@ export default function App() {
     } else {
       document.documentElement.classList.remove('dark');
     }
-    localStorage.setItem('fitfocus_darkmode', darkMode.toString());
+    localStorage.setItem('repz_darkmode', darkMode.toString());
   }, [darkMode]);
   
   // Charger le profil depuis le localStorage
@@ -108,7 +108,7 @@ export default function App() {
     goal: Goal;
     focus: string;
   } | null>(() => {
-    const saved = localStorage.getItem('fitfocus_profile');
+    const saved = localStorage.getItem('repz_profile') || localStorage.getItem('fitfocus_profile');
     return saved ? JSON.parse(saved) : null;
   });
 
@@ -132,7 +132,7 @@ export default function App() {
         ...prev,
         ...profile
       }));
-      localStorage.setItem('fitfocus_profile', JSON.stringify(profile));
+      localStorage.setItem('repz_profile', JSON.stringify(profile));
     }
   }, [profile]);
 
@@ -147,7 +147,7 @@ export default function App() {
       goal: formData.goal,
       focus: formData.focus
     };
-    localStorage.setItem('fitfocus_profile', JSON.stringify(profileToSave));
+    localStorage.setItem('repz_profile', JSON.stringify(profileToSave));
   }, [
     formData.firstName, 
     formData.age, 
@@ -160,7 +160,7 @@ export default function App() {
 
   // Sauvegarder l'historique quand il change
   useEffect(() => {
-    localStorage.setItem('fitfocus_history', JSON.stringify(history));
+    localStorage.setItem('repz_history', JSON.stringify(history));
   }, [history]);
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
