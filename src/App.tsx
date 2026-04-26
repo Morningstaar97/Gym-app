@@ -5,8 +5,8 @@
 
 import React, { useState, useEffect, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI } from "@google/genai";
 import { 
-  ChevronRight, 
   Dumbbell, 
   Clock, 
   Target, 
@@ -20,11 +20,43 @@ import {
   Image as ImageIcon,
   ExternalLink,
   History,
-  Sun,
-  Moon,
   Trash2,
-  Trash
+  Trash,
+  Star,
+  Save,
+  Award,
+  Plus,
+  Minus,
+  User,
+  Play,
+  RotateCcw,
+  BarChart3,
+  PieChart as PieChartIcon,
+  Activity,
+  Award as AwardIcon,
+  TrendingUp,
+  LineChart as LineChartIcon,
+  Maximize2,
+  Minimize2,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList
 } from 'lucide-react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell,
+  PieChart,
+  Pie,
+  LineChart,
+  Line,
+  CartesianGrid,
+  Legend
+} from 'recharts';
 
 type Goal = 'perdrePoids' | 'prendreMuscle' | 'gagnerForce';
 type Intensity = 'faible' | 'modérée' | 'élevée';
@@ -53,23 +85,33 @@ interface Exercise {
   form: string; 
   modifications: string; 
   youtubeUrl: string; 
-  googleImageUrl: string; // Nouveau: lien image
+  googleImageUrl: string;
+  completedWeights?: string[]; // Poids saisis par l'utilisateur
+  completedRPEs?: string[]; // RPE (0-10)
+}
+
+interface ExerciseStep {
+  name: string;
+  youtubeUrl?: string;
+  googleImageUrl?: string;
 }
 
 interface WorkoutPlan {
-  id: string; // Nouveau: unique ID
-  date: string; // Nouveau: date de création
+  id: string;
+  date: string;
   title: string;
   description: string;
   exercises: Exercise[];
-  warmup: string[];
-  cooldown: string[];
-  params: UserData; // Nouveau: paramètres utilisés
+  warmup: ExerciseStep[];
+  cooldown: ExerciseStep[];
+  params: UserData;
+  isFavorite?: boolean; // Pour les programmes enregistrés
 }
 
 const MUSCLE_GROUPS = [
   'Pectoraux', 'Dos', 'Épaules', 'Biceps', 'Triceps', 
-  'Quadriceps', 'Ischios', 'Fessiers', 'Mollets', 'Abdos'
+  'Quadriceps', 'Ischios', 'Fessiers', 'Mollets', 'Abdos',
+  'Avant-bras', 'Trapèzes'
 ];
 
 export default function App() {
@@ -81,22 +123,17 @@ export default function App() {
     const saved = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
     return saved ? JSON.parse(saved) : [];
   });
+  const [favorites, setFavorites] = useState<WorkoutPlan[]>(() => {
+    const saved = localStorage.getItem('repz_favorites');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [error, setError] = useState<string | null>(null);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('repz_darkmode') || localStorage.getItem('fitfocus_darkmode');
-    return saved === 'true';
-  });
   
   // Appliquer le mode sombre
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    localStorage.setItem('repz_darkmode', darkMode.toString());
-  }, [darkMode]);
+    document.documentElement.classList.add('dark');
+  }, []);
   
   // Charger le profil depuis le localStorage
   const [profile, setProfile] = useState<{
@@ -136,6 +173,12 @@ export default function App() {
     }
   }, [profile]);
 
+  const [historyTab, setHistoryTab] = useState<'sessions' | 'favorites' | 'stats'>('sessions');
+  const [focusedExerciseIndex, setFocusedExerciseIndex] = useState<number | null>(null);
+
+  // Initialisation IA
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
   // Sauvegarder automatiquement les champs du profil dans localStorage en temps réel
   useEffect(() => {
     const profileToSave = {
@@ -158,10 +201,14 @@ export default function App() {
     formData.focus
   ]);
 
-  // Sauvegarder l'historique quand il change
+  // Sauvegarder l'historique et les favoris quand ils changent
   useEffect(() => {
     localStorage.setItem('repz_history', JSON.stringify(history));
   }, [history]);
+
+  useEffect(() => {
+    localStorage.setItem('repz_favorites', JSON.stringify(favorites));
+  }, [favorites]);
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -208,60 +255,61 @@ export default function App() {
     setError(null);
 
     try {
-      const prompt = `
-        Tu es un coach de fitness professionnel. Génère un plan d'entraînement équilibré basé sur les infos suivantes :
-        - Âge : ${formData.age}
-        - Genre : ${formData.gender}
-        - Niveau : ${formData.experience}
-        - Équipement : ${formData.equipment === 'maison' ? 'Sans équipement' : formData.equipment === 'typique' ? 'Salle standard' : 'Salle pro avancée'}
-        - Muscles cibles : ${formData.targetMuscles.length > 0 ? formData.targetMuscles.join(', ') : 'Corps complet'}
-        - Focus général : ${formData.focus}
-        - Durée : ${formData.duration} minutes
-        - Intensité : ${formData.intensity}
-        - Objectif : ${formData.goal}
+      // Prompt plus robuste
+      const prompt = `Tu es Repz AI, un coach de fitness expert. 
+Génère un programme d'entraînement PERSONNALISÉ et ÉQUILIBRÉ en respectant STRICTEMENT ces paramètres :
+- Utilisateur : ${formData.gender}, ${formData.age} ans
+- Niveau : ${formData.experience}
+- Objectif : ${formData.goal}
+- Équipement : ${formData.equipment}
+- Séance : ${formData.duration} minutes, Intensité ${formData.intensity}
+- Muscles cibles : ${formData.targetMuscles.join(', ') || 'Corps complet'}
 
-        Exigences :
-        1. Les exercices DOIVENT être adaptés au niveau : ${formData.experience} et au genre : ${formData.gender}.
-        2. Ils doivent être réalisables avec l'équipement : ${formData.equipment}.
-        3. Pour chaque exercice, inclus la technique parfaite ("form") et des modifications pour différents niveaux ("modifications").
-        4. Pour chaque exercice, fournis deux liens :
-           - "youtubeUrl": un lien de recherche YouTube (ex: https://www.youtube.com/results?search_query=bench+press+form)
-           - "googleImageUrl": un lien de recherche Google Images (ex: https://www.google.com/search?tbm=isch&q=bench+press+exercise+demonstration)
-        5. RÉPONDS UNIQUEMENT EN FRANÇAIS.
+Réponds UNIQUEMENT avec un objet JSON valide suivant ce schéma exact :
+{
+  "title": "Nom motivant (ex: Puissance & Cardio)",
+  "description": "Courte description accrocheuse",
+  "warmup": [
+    {
+      "name": "Nom de l'exercice d'échauffement",
+      "youtubeUrl": "Lien YouTube",
+      "googleImageUrl": "Lien Google Images"
+    }
+  ],
+  "exercises": [
+    {
+      "name": "Nom de l'exercice",
+      "sets": "Nombre de séries (chiffre)",
+      "reps": "Nombre de répétitions ou temps",
+      "notes": "Conseil clé pour l'exécution",
+      "form": "Explications détaillées de la technique",
+      "modifications": "Variantes selon le niveau",
+      "youtubeUrl": "Lien de recherche YouTube : https://www.youtube.com/results?search_query=Nom+de+l'exercice+form",
+      "googleImageUrl": "Lien Google Images : https://www.google.com/search?tbm=isch&q=Nom+de+l'exercice+demonstration"
+    }
+  ],
+  "cooldown": [
+    {
+      "name": "Nom de l'exercice de retour au calme",
+      "youtubeUrl": "Lien YouTube",
+      "googleImageUrl": "Lien Google Images"
+    }
+  ]
+}
+Le JSON doit être propre, sans texte avant ou après.`;
 
-        Structure JSON attendue :
-        {
-          "title": "Titre accrocheur",
-          "description": "Aperçu court",
-          "warmup": ["étape 1", "étape 2"],
-          "exercises": [{
-            "name": "Nom de l'exercice", 
-            "sets": "nombre", 
-            "reps": "répétitions", 
-            "notes": "astuce courte",
-            "form": "Explication de la forme correcte",
-            "modifications": "Adaptations selon le niveau",
-            "youtubeUrl": "lien youtube",
-            "googleImageUrl": "lien google images"
-          }],
-          "cooldown": ["étape 1", "étape 2"]
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
         }
-        Réponds UNIQUEMENT avec le JSON.
-      `;
-
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt }),
       });
 
-      const data = await res.json();
+      const text = response.text;
+      if (!text) throw new Error("L'IA n'a pas renvoyé de contenu.");
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Erreur lors de la communication avec le serveur.');
-      }
+      const data = JSON.parse(text);
 
       const newWorkout: WorkoutPlan = {
         ...data,
@@ -289,16 +337,98 @@ export default function App() {
     }
   };
 
-  const finishSession = () => {
-    if (workout) {
-      setHistory(prev => [workout, ...prev]);
+  const updateWeight = (exerciseIndex: number, setIndex: number, weight: string) => {
+    if (!workout) return;
+    const updatedExercises = [...workout.exercises];
+    const exercise = { ...updatedExercises[exerciseIndex] };
+    const weights = [...(exercise.completedWeights || [])];
+    
+    // S'assurer que le tableau a assez de places pour le setIndex
+    while (weights.length <= setIndex) weights.push('');
+    
+    const wasEmpty = weights[setIndex] === '';
+    weights[setIndex] = weight;
+    exercise.completedWeights = weights;
+    updatedExercises[exerciseIndex] = exercise;
+    
+    setWorkout({ ...workout, exercises: updatedExercises });
+  };
+
+  const updateRPE = (exerciseIndex: number, setIndex: number, rpe: string) => {
+    if (!workout) return;
+    const updatedExercises = [...workout.exercises];
+    const exercise = { ...updatedExercises[exerciseIndex] };
+    const rpes = [...(exercise.completedRPEs || [])];
+    
+    while (rpes.length <= setIndex) rpes.push('');
+    
+    rpes[setIndex] = rpe;
+    exercise.completedRPEs = rpes;
+    updatedExercises[exerciseIndex] = exercise;
+    
+    setWorkout({ ...workout, exercises: updatedExercises });
+  };
+
+  const toggleFavorite = () => {
+    if (!workout) return;
+    const isFav = favorites.some(f => f.id === workout.id);
+    if (isFav) {
+      setFavorites(prev => prev.filter(f => f.id !== workout.id));
+    } else {
+      setFavorites(prev => [...prev, { ...workout, isFavorite: true }]);
     }
-    reset();
+  };
+
+  const finishSession = () => {
+    if (!workout) return;
+    
+    // Calculer les stats de session
+    let totalVolume = 0;
+    let totalSets = 0;
+    let rpeSum = 0;
+    let setsWithRpe = 0;
+
+    workout.exercises.forEach(ex => {
+      ex.completedWeights?.forEach((w, idx) => {
+        const weight = parseFloat(w);
+        const reps = parseInt(ex.reps) || 0;
+        if (!isNaN(weight)) {
+          totalVolume += weight * reps;
+          totalSets++;
+        }
+      });
+      ex.completedRPEs?.forEach(r => {
+        const rpe = parseFloat(r);
+        if (!isNaN(rpe)) {
+          rpeSum += rpe;
+          setsWithRpe++;
+        }
+      });
+    });
+
+    const averageRpe = setsWithRpe > 0 ? (rpeSum / setsWithRpe).toFixed(1) : null;
+
+    const completedWorkout = {
+      ...workout,
+      volume: totalVolume,
+      avgRpe: averageRpe,
+      date: new Date().toLocaleDateString('fr-FR', { 
+        day: '2-digit', 
+        month: 'long', 
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    };
+    setHistory(prev => [completedWorkout, ...prev]);
+    setStep('history');
+    setFocusedExerciseIndex(null);
   };
 
   const reset = () => {
     setStep('info');
     setWorkout(null);
+    setFocusedExerciseIndex(null);
   };
 
   const deleteExercise = (index: number) => {
@@ -325,7 +455,7 @@ export default function App() {
         - Âge : ${formData.age}
         - Équipement disponible : ${formData.equipment}
 
-        Réponds UNIQUEMENT avec un objet JSON au format suivant :
+        Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
         {
           "name": "Nom du nouvel exercice", 
           "sets": "${exercise.sets}", 
@@ -333,19 +463,23 @@ export default function App() {
           "notes": "astuce courte",
           "form": "Explication de la forme correcte",
           "modifications": "Adaptations",
-          "youtubeUrl": "lien youtube",
-          "googleImageUrl": "lien google images"
+          "youtubeUrl": "Lien YouTube : https://www.youtube.com/results?search_query=Nom+de+l'exercice+form",
+          "googleImageUrl": "Lien Google Images : https://www.google.com/search?tbm=isch&q=Nom+de+l'exercice+demonstration"
         }
       `;
 
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const text = response.text;
+      if (!text) throw new Error("L'IA n'a pas renvoyé de contenu.");
+
+      const data = JSON.parse(text);
 
       const updatedExercises = [...workout.exercises];
       updatedExercises[index] = data;
@@ -369,33 +503,15 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] bg-natural-bg text-natural-ink font-sans selection:bg-natural-highlight flex flex-col transition-colors duration-300 overflow-x-hidden">
       {/* Salutation du haut */}
-      <div className="w-full bg-white/30 backdrop-blur-sm border-b border-stone-100 dark:bg-black/10 dark:border-white/5 safe-p-top">
-        <div className="max-w-4xl mx-auto px-6 py-4 grid grid-cols-3 items-center">
-          <div className="flex justify-start overflow-hidden">
-            {profile?.firstName && (
-              <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest text-stone-400 truncate">
-                Bonjour {profile.firstName}
-              </span>
-            )}
-          </div>
-          
-          <div className="flex justify-center whitespace-nowrap">
-            <span className="text-lg sm:text-xl font-serif text-natural-accent/60 italic tracking-widest">بالصحة و الراحة</span>
-          </div>
-
-          <div className="flex justify-end">
-            <button 
-              onClick={() => setDarkMode(!darkMode)}
-              className="p-2 rounded-full hover:bg-stone-100 dark:hover:bg-white/5 transition-all text-stone-600 dark:text-stone-400"
-              title={darkMode ? "Mode Jour" : "Mode Nuit"}
-            >
-              {darkMode ? <Sun className="w-4 h-4 sm:w-5 h-5" /> : <Moon className="w-4 h-4 sm:w-5 h-5" />}
-            </button>
-          </div>
+      <div className="w-full bg-white/80 dark:bg-natural-bg/80 backdrop-blur-md border-b border-stone-200 dark:border-white/10 safe-p-top sticky top-0 z-50 transition-colors">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-2 sm:py-3 flex items-center justify-center relative min-h-[50px] sm:min-h-[64px]">
+          <button onClick={reset} className="flex flex-col items-center border-none bg-transparent cursor-pointer group">
+            <span className="text-xl sm:text-2xl font-black uppercase tracking-tighter text-natural-accent leading-none group-hover:scale-105 transition-transform drop-shadow-[0_0_12px_rgba(202,255,51,0.4)]">Repz</span>
+          </button>
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-12 md:py-16 flex-grow">
+      <div className="max-w-4xl w-full mx-auto px-4 sm:px-6 py-8 md:py-16 flex-grow">
         <AnimatePresence mode="wait">
           {step === 'info' && (
             <motion.div
@@ -405,35 +521,35 @@ export default function App() {
               exit={{ opacity: 0, scale: 0.98 }}
               className="bg-white dark:bg-natural-subtle rounded-[40px] shadow-2xl shadow-stone-200/50 dark:shadow-black/20 overflow-hidden flex flex-col transition-colors duration-300"
             >
-              <div className="p-8 md:p-12 pb-0">
-                <header className="mb-10 text-center md:text-left flex flex-col md:flex-row justify-between items-center gap-4">
-                  <div>
-                    <h1 className="text-4xl font-serif font-medium text-natural-accent mb-3 tracking-tight">
+              <div className="p-6 sm:p-8 md:p-12 pb-0">
+                <header className="mb-8 md:mb-10 text-center md:text-left flex flex-col md:flex-row justify-between items-center gap-6">
+                  <div className="flex-grow">
+                    <h1 className="text-3xl sm:text-4xl font-serif font-medium text-natural-accent mb-2 tracking-tight">
                       {(!profile || showProfileEdit) ? "Votre Profil" : "Ma Séance"}
                     </h1>
-                    <p className="text-stone-500 max-w-xl">
+                    <p className="text-stone-600 dark:text-stone-300 text-sm sm:text-base max-w-xl">
                       {(!profile || showProfileEdit) 
-                        ? "Configurez vos informations de base une seule fois." 
-                        : "Prêt pour votre entraînement du jour ?"}
+                        ? "Configurez vos informations de base." 
+                        : "Prêt pour votre entraînement ?"}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap justify-center gap-2">
                     {profile && !showProfileEdit && (
                       <button 
                         onClick={() => setShowProfileEdit(true)}
-                        className="group flex items-center gap-2 px-4 py-2 bg-stone-50 dark:bg-white/5 rounded-full border border-stone-100 dark:border-white/5 hover:border-natural-accent transition-all"
+                        className="group flex items-center gap-2 px-6 py-2.5 bg-neutral-subtle dark:bg-white/5 rounded-full border border-stone-200 dark:border-white/10 hover:border-natural-accent transition-all shadow-sm"
                       >
-                        <Zap className="w-4 h-4 text-stone-400 group-hover:text-natural-accent" />
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Profil</span>
+                        <User className="w-4 h-4 text-stone-600 dark:text-stone-400 group-hover:text-natural-accent" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-stone-700 dark:text-stone-300 group-hover:text-natural-accent">Modifier mon profil</span>
                       </button>
                     )}
-                    {history.length > 0 && (
+                    {history.length > 0 && profile && !showProfileEdit && (
                       <button 
                         onClick={() => setStep('history')}
-                        className="group flex items-center gap-2 px-4 py-2 bg-natural-subtle rounded-full border border-stone-100 hover:border-natural-accent transition-all"
+                        className="group flex items-center gap-2 px-6 py-2.5 bg-neutral-subtle dark:bg-white/5 rounded-full border border-stone-200 dark:border-white/10 hover:border-natural-accent transition-all shadow-sm"
                       >
-                        <History className="w-4 h-4 text-stone-400 group-hover:text-natural-accent" />
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Historique ({history.length})</span>
+                        <History className="w-4 h-4 text-stone-600 dark:text-stone-400 group-hover:text-natural-accent" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-stone-700 dark:text-stone-300 group-hover:text-natural-accent">Mon Journal ({history.length})</span>
                       </button>
                     )}
                   </div>
@@ -444,9 +560,9 @@ export default function App() {
                   {(!profile || showProfileEdit) ? (
                     <>
                       {/* Colonne Gauche (Profil) */}
-                      <div className="space-y-10">
+                      <div className="space-y-8 sm:space-y-10">
                         <section>
-                          <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Profil</label>
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Profil</label>
                           <div className="flex flex-col gap-4">
                             <div className="group w-full">
                               <input
@@ -455,42 +571,42 @@ export default function App() {
                                 value={formData.firstName}
                                 onChange={handleInputChange}
                                 placeholder="Votre prénom"
-                                className="w-full bg-natural-subtle border-b-2 border-stone-100 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300 font-medium"
+                                className="w-full bg-natural-subtle dark:bg-white/5 border-b-2 border-stone-100 dark:border-white/10 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300 dark:placeholder:text-stone-600 font-medium"
                               />
                             </div>
-                            <div className="flex flex-wrap gap-4">
-                              <div className="flex-1 min-w-[80px] group">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="group">
                                 <input
                                   type="number"
                                   name="age"
                                   value={formData.age}
                                   onChange={handleInputChange}
                                   placeholder="Âge"
-                                  className="w-full bg-natural-subtle border-b-2 border-stone-100 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300"
+                                  className="w-full bg-natural-subtle dark:bg-white/5 border-b-2 border-stone-100 dark:border-white/10 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300 dark:placeholder:text-stone-600"
                                 />
                               </div>
-                              <div className="w-full flex bg-stone-50 p-1 rounded-2xl gap-1">
-                              {(['homme', 'femme'] as const).map((g) => (
-                                <button
-                                  key={g}
-                                  onClick={() => setFormData(prev => ({ ...prev, gender: g }))}
-                                  className={`flex-1 min-h-[44px] py-3 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
-                                    formData.gender === g 
-                                      ? 'bg-white text-natural-accent shadow-sm' 
-                                      : 'text-stone-400 hover:text-stone-600'
-                                  }`}
-                                >
-                                  {g}
-                                </button>
-                              ))}
+                              <div className="flex bg-stone-50 dark:bg-white/5 p-1 rounded-2xl gap-1">
+                                {(['homme', 'femme'] as const).map((g) => (
+                                  <button
+                                    key={g}
+                                    onClick={() => setFormData(prev => ({ ...prev, gender: g }))}
+                                    className={`flex-1 min-h-[44px] py-1 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                                      formData.gender === g 
+                                        ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-white shadow-sm' 
+                                        : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
+                                    }`}
+                                  >
+                                    {g}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </section>
+                        </section>
 
-                      <section>
-                        <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Environnement</label>
-                          <div className="grid grid-cols-1 gap-2">
+                        <section>
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Environnement</label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-1 gap-2">
                             {[
                               { id: 'maison', label: 'À la maison', icon: '🏠' },
                               { id: 'typique', label: 'Salle standard', icon: '🏢' },
@@ -501,8 +617,8 @@ export default function App() {
                                 onClick={() => setFormData(prev => ({ ...prev, equipment: env.id as Equipment }))}
                                 className={`flex items-center gap-4 p-3 rounded-2xl border transition-all ${
                                   formData.equipment === env.id 
-                                  ? 'border-natural-accent bg-natural-subtle' 
-                                  : 'border-stone-50 hover:bg-natural-subtle/50'
+                                  ? 'border-natural-accent bg-natural-subtle dark:bg-natural-accent/10' 
+                                  : 'border-stone-50 dark:border-white/5 hover:bg-natural-subtle/50'
                                 }`}
                               >
                                 <span className="text-xl">{env.icon}</span>
@@ -516,7 +632,7 @@ export default function App() {
                       {/* Colonne Droite (Objectifs) */}
                       <div className="space-y-10">
                         <section>
-                          <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Niveau</label>
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Niveau</label>
                           <div className="grid grid-cols-2 gap-3">
                             {(['débutant', 'intermédiaire', 'avancé', 'professionnel'] as const).map((lvl) => (
                               <label key={lvl} className="flex-1 cursor-pointer">
@@ -527,7 +643,7 @@ export default function App() {
                                   onChange={() => setFormData(prev => ({ ...prev, experience: lvl }))}
                                   className="hidden peer" 
                                 />
-                                <div className="text-center py-4 rounded-3xl border border-stone-50 dark:border-white/5 bg-stone-50/50 dark:bg-white/5 peer-checked:bg-natural-highlight peer-checked:border-natural-accent peer-checked:text-natural-accent transition-all text-[10px] font-bold uppercase tracking-widest leading-none">
+                                <div className="text-center py-4 rounded-3xl border border-stone-50 dark:border-white/5 bg-stone-50/50 dark:bg-white/5 peer-checked:bg-natural-accent peer-checked:border-natural-accent peer-checked:text-black transition-all text-[10px] font-bold uppercase tracking-widest leading-none shadow-sm peer-checked:shadow-[0_0_15px_rgba(202,255,51,0.2)]">
                                   {lvl}
                                 </div>
                               </label>
@@ -536,7 +652,7 @@ export default function App() {
                         </section>
 
                         <section>
-                          <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Objectif Global</label>
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Objectif Global</label>
                           <select
                             name="goal"
                             value={formData.goal}
@@ -555,16 +671,16 @@ export default function App() {
                       {/* MODE SÉANCE RAPIDE (Profil déjà sauvé) */}
                       <div className="space-y-10">
                         <section>
-                          <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Groupes Musculaires</label>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Groupes Musculaires</label>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                             {MUSCLE_GROUPS.map((muscle) => (
                               <button
                                 key={muscle}
                                 onClick={() => toggleMuscle(muscle)}
-                                className={`py-2 px-1 text-[10px] font-bold uppercase tracking-tight rounded-xl border transition-all ${
+                                className={`py-4 sm:py-2 px-1 text-[10px] font-black uppercase tracking-tight rounded-xl border transition-all ${
                                   formData.targetMuscles.includes(muscle)
-                                  ? 'bg-natural-accent border-natural-accent text-white' 
-                                  : 'border-stone-100 text-stone-400 hover:border-natural-accent'
+                                  ? 'bg-natural-accent border-natural-accent text-black shadow-[0_0_15px_rgba(202,255,51,0.2)]' 
+                                  : 'bg-white dark:bg-white/5 border-stone-100 dark:border-white/5 text-stone-500 hover:border-natural-accent'
                                 }`}
                               >
                                 {muscle}
@@ -576,7 +692,7 @@ export default function App() {
 
                       <div className="space-y-10">
                         <section>
-                          <label className="block text-[10px] font-bold uppercase tracking-[0.2em] text-stone-400 mb-4">Durée & Intensité</label>
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Durée & Intensité</label>
                           <div className="space-y-6">
                             <div className="group">
                               <input
@@ -595,7 +711,7 @@ export default function App() {
                                   onClick={() => setFormData(prev => ({ ...prev, intensity: level }))}
                                   className={`flex-1 min-h-[44px] py-3 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
                                     formData.intensity === level 
-                                      ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-white shadow-sm' 
+                                      ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-black shadow-[0_0_15px_rgba(202,255,51,0.2)]' 
                                       : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
                                   }`}
                                 >
@@ -619,8 +735,8 @@ export default function App() {
               </div>
 
               {/* Barre d'action */}
-              <div className="mt-12 bg-natural-accent p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-6">
-                <div className="text-white/70 text-xs text-center md:text-left tracking-wide leading-relaxed">
+              <div className="mt-12 bg-natural-accent p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-6 transition-colors">
+                <div className="text-black/80 font-medium text-sm text-center md:text-left tracking-wide leading-relaxed">
                   <p>
                     {(!profile || showProfileEdit) 
                       ? "Le profil utilisateur sera mémorisé pour vos prochaines visites." 
@@ -630,7 +746,7 @@ export default function App() {
                 <button
                   onClick={generateWorkout}
                   disabled={loading}
-                  className="w-full md:w-auto bg-white text-natural-accent px-12 py-5 rounded-full font-bold shadow-xl hover:bg-stone-50 transition-all active:scale-95 uppercase tracking-[0.25em] text-[10px] flex items-center justify-center gap-3 disabled:opacity-70"
+                  className="w-full md:w-auto bg-black text-natural-accent px-12 py-5 rounded-full font-black shadow-2xl hover:scale-105 transition-all active:scale-95 uppercase tracking-[0.25em] text-[11px] flex items-center justify-center gap-3 disabled:opacity-70 border border-natural-accent/20"
                 >
                   {loading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -643,12 +759,218 @@ export default function App() {
           )}
 
           {step === 'workout' && workout && (
-            <motion.div
-              key="workout-display"
+            focusedExerciseIndex !== null ? (
+              <motion.div
+                key="focus-mode"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                className="fixed inset-0 z-[100] bg-white dark:bg-stone-950 flex flex-col"
+              >
+                {/* Header - Fixed & Optimized */}
+                <div className="p-4 md:p-8 md:pb-6 shrink-0 z-20 bg-white dark:bg-stone-950">
+                  <div className="flex items-center justify-between max-w-7xl mx-auto w-full">
+                    <button 
+                      onClick={() => setFocusedExerciseIndex(null)}
+                      className="flex items-center gap-2 text-stone-500 hover:text-black dark:text-stone-400 dark:hover:text-white transition-colors group"
+                    >
+                      <Minimize2 className="w-5 h-5 md:w-6 md:h-6 group-hover:scale-110 transition-transform" />
+                      <span className="text-[9px] md:text-[11px] font-black uppercase tracking-[0.2em] whitespace-nowrap">Quitter</span>
+                    </button>
+                    <div className="flex items-center gap-3 md:gap-6">
+                      <span className="text-[9px] md:text-[11px] font-black uppercase tracking-[0.2em] text-natural-accent whitespace-nowrap">Ex {focusedExerciseIndex + 1}/{workout.exercises.length}</span>
+                      <div className="w-20 md:w-64 h-1.5 md:h-2 bg-stone-100 dark:bg-white/5 rounded-full overflow-hidden border border-stone-200/50 dark:border-white/10">
+                        <div 
+                          className="h-full bg-natural-accent transition-all duration-700 ease-out shadow-[0_0_10px_rgba(202,255,51,0.3)]" 
+                          style={{ width: `${((focusedExerciseIndex + 1) / workout.exercises.length) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Main Content - Scrollable area */}
+                <div className="flex-1 overflow-hidden flex flex-col max-w-7xl mx-auto w-full relative">
+                  <div className="flex-1 overflow-y-auto px-4 md:px-8 custom-scrollbar">
+                    <div className="flex flex-col lg:flex-row gap-6 md:gap-8 pb-32 lg:pb-8">
+                      {/* Left Column: Visuals & Info */}
+                      <div className="flex-1 space-y-4 md:space-y-6">
+                         <div className="relative aspect-video bg-stone-100 dark:bg-white/5 rounded-[32px] md:rounded-[40px] overflow-hidden group">
+                          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 md:p-8 text-center">
+                            <Dumbbell className="w-12 h-12 md:w-16 md:h-16 text-natural-accent mb-3 md:mb-4 opacity-20" />
+                            <h2 className="text-2xl md:text-3xl lg:text-5xl font-serif font-medium mb-3 md:mb-4 text-balance leading-tight">
+                              {workout.exercises[focusedExerciseIndex].name}
+                            </h2>
+                            <div className="flex gap-2 md:gap-4 flex-wrap justify-center">
+                              {workout.exercises[focusedExerciseIndex].youtubeUrl && (
+                                 <a 
+                                   href={workout.exercises[focusedExerciseIndex].youtubeUrl} 
+                                   target="_blank" 
+                                   rel="noreferrer"
+                                   className="px-4 md:px-6 py-2 md:py-3 bg-red-500 text-white rounded-full font-bold text-[9px] md:text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
+                                 >
+                                   <Youtube className="w-4 h-4" /> Vidéo
+                                 </a>
+                              )}
+                              {workout.exercises[focusedExerciseIndex].googleImageUrl && (
+                                 <a 
+                                   href={workout.exercises[focusedExerciseIndex].googleImageUrl} 
+                                   target="_blank" 
+                                   rel="noreferrer"
+                                   className="px-4 md:px-6 py-2 md:py-3 bg-blue-500 text-white rounded-full font-bold text-[9px] md:text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-blue-600 transition-all shadow-lg shadow-blue-500/20"
+                                 >
+                                   <ImageIcon className="w-4 h-4" /> Image
+                                 </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-stone-50 dark:bg-white/5 p-6 md:p-8 rounded-[32px] md:rounded-[40px] border border-stone-100 dark:border-white/5">
+                          <div className="flex items-center gap-2 mb-3 md:mb-4 text-natural-accent">
+                            <ClipboardList className="w-4 h-4 md:w-5 md:h-5" />
+                            <h3 className="text-[10px] md:text-sm font-black uppercase tracking-widest">Instructions</h3>
+                          </div>
+                          <p className="text-sm md:text-lg text-stone-700 dark:text-stone-300 font-serif leading-relaxed italic">
+                            {workout.exercises[focusedExerciseIndex].form}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Right Column: Tracking & Log */}
+                      <div className="w-full lg:w-[420px] shrink-0">
+                        <div className="bg-stone-900 text-white p-6 md:p-8 rounded-[32px] md:rounded-[48px] shadow-2xl relative overflow-hidden">
+                          <div className="absolute top-0 right-0 w-32 h-32 bg-natural-accent/15 rounded-full blur-3xl -mr-16 -mt-16" />
+                          
+                          <div className="relative z-10 flex flex-col h-full">
+                            <div className="flex items-center justify-between mb-6 md:mb-8">
+                               <div className="space-y-1">
+                                  <p className="text-[8px] md:text-[10px] font-black uppercase tracking-widest text-natural-accent">Objectif</p>
+                                  <p className="text-xl md:text-3xl font-black">{workout.exercises[focusedExerciseIndex].sets} x {workout.exercises[focusedExerciseIndex].reps}</p>
+                               </div>
+                            </div>
+
+                            <div className="space-y-4">
+                              <label className="block text-[8px] md:text-[10px] font-black uppercase tracking-widest text-white/60">Log des Séries</label>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 overflow-y-visible">
+                                {Array.from({ length: parseInt(workout.exercises[focusedExerciseIndex].sets) || 1 }).map((_, setIdx) => {
+                                  const isCompleted = workout.exercises[focusedExerciseIndex].completedWeights?.[setIdx];
+                                  return (
+                                    <motion.div 
+                                      key={setIdx} 
+                                      whileHover={{ scale: 1.01 }}
+                                      className={`p-4 md:p-5 rounded-[24px] md:rounded-[28px] border-2 transition-all flex flex-col gap-2 ${
+                                        isCompleted
+                                        ? 'bg-natural-accent/15 border-natural-accent shadow-[0_0_20px_rgba(202,255,51,0.15)] scale-[1.02]'
+                                        : 'bg-white/5 border-white/10'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-widest ${isCompleted ? 'text-natural-accent' : 'opacity-60'}`}>Série {setIdx + 1}</span>
+                                        {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 md:w-4 md:h-4 text-natural-accent" />}
+                                      </div>
+                                      
+                                      <div className="flex items-end gap-3">
+                                        <div className="flex-1">
+                                          <p className="text-[7px] font-black text-white/30 uppercase tracking-widest mb-1">Poids (kg)</p>
+                                          <input 
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={workout.exercises[focusedExerciseIndex].completedWeights?.[setIdx] || ''}
+                                            onChange={(e) => updateWeight(focusedExerciseIndex, setIdx, e.target.value)}
+                                            placeholder="0.0"
+                                            className="bg-transparent text-xl md:text-3xl font-black focus:outline-none placeholder:text-white/20 w-full"
+                                          />
+                                        </div>
+                                        <div className="w-[80px]">
+                                          <p className="text-[7px] font-black text-white/30 uppercase tracking-widest mb-1 text-right">RPE (0-10)</p>
+                                          <input 
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={workout.exercises[focusedExerciseIndex].completedRPEs?.[setIdx] || ''}
+                                            onChange={(e) => {
+                                              const val = e.target.value;
+                                              if (val === '' || (parseInt(val) >= 0 && parseInt(val) <= 10)) {
+                                                updateRPE(focusedExerciseIndex, setIdx, val);
+                                              }
+                                            }}
+                                            placeholder="—"
+                                            className="bg-transparent text-lg md:text-xl font-black focus:outline-none placeholder:text-white/20 w-full text-right"
+                                          />
+                                        </div>
+                                      </div>
+                                    </motion.div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Desktop Controls */}
+                            <div className="hidden lg:flex mt-8 pt-8 border-t border-white/10 flex-col gap-4">
+                               <div className="flex items-center gap-4">
+                                  <button 
+                                    onClick={() => focusedExerciseIndex > 0 && setFocusedExerciseIndex(focusedExerciseIndex - 1)}
+                                    disabled={focusedExerciseIndex === 0}
+                                    className="h-16 w-16 rounded-full flex items-center justify-center bg-white/5 border border-white/10 hover:bg-white/15 disabled:opacity-20 transition-all font-black"
+                                  >
+                                    <ChevronLeft className="w-8 h-8" />
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      if (focusedExerciseIndex < workout.exercises.length - 1) {
+                                        setFocusedExerciseIndex(focusedExerciseIndex + 1);
+                                      } else {
+                                        setFocusedExerciseIndex(null);
+                                      }
+                                    }}
+                                    className="h-16 flex-1 rounded-[32px] bg-natural-accent text-black font-black uppercase tracking-[0.1em] text-xs flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_0_40px_rgba(202,255,51,0.25)]"
+                                  >
+                                    <span>{focusedExerciseIndex < workout.exercises.length - 1 ? 'Exercice Suivant' : 'Terminer Focus'}</span>
+                                    <ChevronRight className="w-6 h-6" />
+                                  </button>
+                               </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Fixed Mobile Navigation Footer */}
+                  <div className="lg:hidden p-4 pb-8 md:pb-10 bg-white dark:bg-stone-950 border-t border-stone-100 dark:border-white/5 shrink-0 z-30">
+                    <div className="flex items-center gap-3 max-w-sm mx-auto">
+                        <button 
+                          onClick={() => focusedExerciseIndex > 0 && setFocusedExerciseIndex(focusedExerciseIndex - 1)}
+                          disabled={focusedExerciseIndex === 0}
+                          className="h-14 w-14 rounded-full flex items-center justify-center bg-stone-100 dark:bg-white/10 border border-stone-200 dark:border-white/10 disabled:opacity-30 active:scale-95 transition-all"
+                        >
+                          <ChevronLeft className="w-6 h-6" />
+                        </button>
+                        
+                        <button 
+                          onClick={() => {
+                            if (focusedExerciseIndex < workout.exercises.length - 1) {
+                              setFocusedExerciseIndex(focusedExerciseIndex + 1);
+                            } else {
+                              setFocusedExerciseIndex(null);
+                            }
+                          }}
+                          className="h-14 flex-1 rounded-[24px] bg-natural-accent text-black font-black uppercase tracking-[0.1em] text-[10px] flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-lg"
+                        >
+                          <span>{focusedExerciseIndex < workout.exercises.length - 1 ? 'Suivant' : 'Terminer'}</span>
+                          <ChevronRight className="w-5 h-5" />
+                        </button>
+                    </div>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="workout-display"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="bg-white rounded-[40px] shadow-2xl shadow-stone-200/50 overflow-hidden"
+              className="bg-white dark:bg-stone-900/40 backdrop-blur-sm rounded-[40px] shadow-2xl shadow-stone-200/50 dark:shadow-black/40 overflow-hidden border border-transparent dark:border-white/5"
             >
               <div className="p-8 md:p-12">
                 <button 
@@ -660,40 +982,115 @@ export default function App() {
                 </button>
 
                 <header className="mb-12 border-b border-stone-100 pb-10">
+                  {/* Progress Bar Container */}
+                  <div className="mb-8 group">
+                    <div className="flex items-center justify-between mb-2">
+                       <span className="text-[9px] font-black uppercase tracking-[0.2em] text-natural-accent">Progression Séance</span>
+                       <span className="text-[10px] font-black text-stone-400 tabular-nums">
+                         {Math.round((workout.exercises.reduce((acc, ex) => acc + (ex.completedWeights?.filter(w => w !== '').length || 0), 0) / 
+                          (workout.exercises.reduce((acc, ex) => acc + (parseInt(ex.sets) || 1), 0) || 1)) * 100)}%
+                       </span>
+                    </div>
+                    <div className="p-1 bg-stone-100 dark:bg-white/5 rounded-full overflow-hidden border border-stone-200/50 dark:border-white/5">
+                      <div 
+                        className="h-2 bg-natural-accent rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(202,255,51,0.3)]" 
+                        style={{ 
+                          width: `${(workout.exercises.reduce((acc, ex) => acc + (ex.completedWeights?.filter(w => w !== '').length || 0), 0) / 
+                            (workout.exercises.reduce((acc, ex) => acc + (parseInt(ex.sets) || 1), 0) || 1)) * 100}%` 
+                        }}
+                      />
+                    </div>
+                  </div>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-                    <h2 className="text-4xl font-serif font-medium text-natural-accent tracking-tight">{workout?.title}</h2>
+                    <div className="flex items-center gap-4">
+                      <h2 className="text-4xl font-serif font-medium text-natural-accent tracking-tight">{workout?.title}</h2>
+                      <button 
+                        onClick={toggleFavorite}
+                        className={`p-3 rounded-full border transition-all ${
+                          favorites.some(f => f.id === workout?.id)
+                          ? 'bg-yellow-50 border-yellow-200 text-yellow-500'
+                          : 'bg-stone-50 border-stone-100 text-stone-300 hover:text-yellow-500'
+                        }`}
+                        title="Enregistrer ce programme"
+                      >
+                        <Star className={`w-5 h-5 ${favorites.some(f => f.id === workout?.id) ? 'fill-current' : ''}`} />
+                      </button>
+                    </div>
                     <div className="inline-flex items-center gap-2 bg-natural-highlight text-natural-accent px-4 py-1.5 rounded-full shadow-sm">
                       <Zap className="w-4 h-4 fill-current" />
                       <span className="text-[10px] font-bold uppercase tracking-[0.2em]">{formData.intensity}</span>
                     </div>
                   </div>
-                  <p className="text-stone-500 text-lg leading-relaxed font-serif italic italic-small">"{workout?.description}"</p>
+                  <p className="text-stone-600 dark:text-stone-300 text-lg leading-relaxed font-serif italic italic-small">"{workout?.description}"</p>
                 </header>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mb-12">
-                  <div className="bg-natural-subtle dark:bg-white/5 p-6 rounded-[30px] border border-stone-100 dark:border-white/5">
-                    <div className="flex items-center gap-2 text-stone-400 mb-2">
-                      <Clock className="w-4 h-4" />
-                      <span className="text-[10px] font-bold uppercase tracking-widest">Durée</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mb-8 md:mb-12">
+                  <div className="bg-natural-subtle dark:bg-white/5 p-4 sm:p-6 rounded-[24px] sm:rounded-[30px] border border-stone-100 dark:border-white/5">
+                    <div className="flex items-center gap-2 text-stone-400 mb-1 sm:mb-2 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest">
+                      <Clock className="w-3 h-3 sm:w-4 h-4" />
+                      <span>Durée</span>
                     </div>
-                    <p className="text-xl font-bold">{formData.duration} <span className="text-sm font-medium text-stone-400">min</span></p>
+                    <p className="text-lg sm:text-xl font-bold">{formData.duration} <span className="text-xs sm:text-sm font-medium text-stone-400">min</span></p>
                   </div>
-                  <div className="bg-natural-subtle dark:bg-white/5 p-6 rounded-[30px] border border-stone-100 dark:border-white/5">
-                    <div className="flex items-center gap-2 text-stone-400 mb-2">
-                      <Target className="w-4 h-4" />
-                      <span className="text-[10px] font-bold uppercase tracking-widest">Cibles</span>
+                  <div className="bg-natural-subtle dark:bg-white/5 p-4 sm:p-6 rounded-[24px] sm:rounded-[30px] border border-stone-100 dark:border-white/5">
+                    <div className="flex items-center gap-2 text-stone-400 mb-1 sm:mb-2 text-[8px] sm:text-[10px] font-bold uppercase tracking-widest">
+                      <Target className="w-3 h-3 sm:w-4 h-4" />
+                      <span>Cibles</span>
                     </div>
-                    <p className="text-xl font-bold truncate">{formData.targetMuscles.join(', ') || 'Corps complet'}</p>
+                    <p className="text-lg sm:text-xl font-bold truncate">{formData.targetMuscles.join(', ') || 'Corps complet'}</p>
                   </div>
                 </div>
 
                 <div className="space-y-16">
-                  {/* Échauffement & Retour au calme simplifiés comme précédemment, focus sur les détails d'exercices */}
+                  {/* Échauffement */}
+                  {workout?.warmup && workout.warmup.length > 0 && (
+                    <section>
+                      <div className="flex items-center gap-4 mb-8">
+                        <div className="h-px bg-stone-100 dark:bg-white/5 flex-grow" />
+                        <div className="flex items-center gap-2 px-4 py-1.5 bg-orange-50 dark:bg-orange-900/20 rounded-full border border-orange-100 dark:border-orange-800">
+                          <Flame className="w-4 h-4 text-orange-500" />
+                          <h3 className="text-[10px] font-bold uppercase tracking-[0.3em] text-orange-600 dark:text-orange-400 shrink-0">Échauffement</h3>
+                        </div>
+                        <div className="h-px bg-stone-100 dark:bg-white/5 flex-grow" />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {workout.warmup.map((step, i) => (
+                           <div key={`warmup-${i}`} className="flex items-start justify-between gap-6 p-4 bg-stone-50 dark:bg-white/5 rounded-2xl border border-stone-200 dark:border-white/10 group hover:border-orange-300 transition-colors">
+                            <div className="flex items-center gap-4">
+                              <span className="flex items-center justify-center w-8 h-8 rounded-full bg-white dark:bg-white/10 text-xs font-black text-stone-500 dark:text-stone-400 group-hover:text-orange-500 transition-colors shadow-sm">
+                                {i + 1}
+                              </span>
+                              <p className="text-base font-bold text-stone-800 dark:text-white">{typeof step === 'string' ? step : step.name}</p>
+                            </div>
+                            
+                            {typeof step !== 'string' && (
+                              <div className="flex gap-2 shrink-0">
+                                {step.youtubeUrl && (
+                                  <a href={step.youtubeUrl} target="_blank" rel="noreferrer" className="w-10 h-10 rounded-full flex items-center justify-center bg-white dark:bg-white/10 text-stone-400 hover:text-red-500 transition-all border border-stone-100 dark:border-white/5 hover:border-red-500/50">
+                                    <Youtube className="w-5 h-5" />
+                                  </a>
+                                )}
+                                {step.googleImageUrl && (
+                                  <a href={step.googleImageUrl} target="_blank" rel="noreferrer" className="w-10 h-10 rounded-full flex items-center justify-center bg-white dark:bg-white/10 text-stone-400 hover:text-blue-500 transition-all border border-stone-100 dark:border-white/5 hover:border-blue-500/50">
+                                    <ImageIcon className="w-5 h-5" />
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
                   <section>
                     <div className="flex items-center gap-4 mb-10">
-                      <div className="h-px bg-stone-100 flex-grow" />
-                      <h3 className="text-[10px] font-bold uppercase tracking-[0.3em] text-stone-400 shrink-0">Exercices & Technique</h3>
-                      <div className="h-px bg-stone-100 flex-grow" />
+                      <div className="h-px bg-stone-100 dark:bg-white/5 flex-grow" />
+                      <div className="flex items-center gap-2 px-4 py-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-full border border-blue-100 dark:border-blue-800">
+                        <Dumbbell className="w-4 h-4 text-blue-500" />
+                        <h3 className="text-[10px] font-bold uppercase tracking-[0.3em] text-blue-600 dark:text-blue-400 shrink-0">Corps de Séance</h3>
+                      </div>
+                      <div className="h-px bg-stone-100 dark:bg-white/5 flex-grow" />
                     </div>
                     <div className="space-y-10">
                       {workout?.exercises.map((ex, i) => (
@@ -704,18 +1101,27 @@ export default function App() {
                           transition={{ delay: i * 0.1 }}
                           className="bg-white dark:bg-black/20 border border-stone-200 dark:border-white/5 rounded-[32px] overflow-hidden hover:border-natural-accent transition-all duration-300"
                         >
-                          <div className="p-6 md:p-8">
-                            <div className="flex flex-col gap-6">
+                          <div className="p-5 sm:p-6 md:p-8">
+                            <div className="flex flex-col gap-5 sm:gap-6">
                               {/* Header: Titre et Actions */}
                               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                                <h4 className="font-serif font-bold text-2xl text-black dark:text-white leading-tight flex-grow max-w-full sm:max-w-[60%] tracking-tight">
+                                <h4 className="font-serif font-bold text-xl sm:text-2xl text-black dark:text-white leading-tight flex-grow max-w-full sm:max-w-[70%] tracking-tight">
                                   {ex.name}
                                 </h4>
                                 
-                                <div className="flex flex-wrap items-center gap-3 shrink-0">
+                                <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0">
+                                  <button
+                                    onClick={() => setFocusedExerciseIndex(i)}
+                                    className="px-4 py-2 bg-stone-100 dark:bg-white/5 text-stone-600 dark:text-stone-300 font-bold uppercase tracking-widest text-[9px] rounded-full hover:bg-natural-accent hover:text-black transition-all flex items-center gap-2 border border-stone-200 dark:border-white/10"
+                                    title="Mode Focus"
+                                  >
+                                    <Maximize2 className="w-3.5 h-3.5" />
+                                    <span>Focus</span>
+                                  </button>
+
                                   <button
                                     onClick={() => deleteExercise(i)}
-                                    className="p-2 text-stone-300 hover:text-red-500 transition-colors"
+                                    className="p-2 text-stone-300 dark:text-stone-500 hover:text-red-500 transition-colors bg-stone-50/50 dark:bg-white/5 rounded-lg"
                                     title="Supprimer l'exercice"
                                   >
                                     <Trash2 className="w-4 h-4" />
@@ -724,28 +1130,28 @@ export default function App() {
                                   <button
                                     onClick={() => getAlternative(i)}
                                     disabled={loadingAlternative !== null}
-                                    className="px-4 py-2 bg-natural-accent/10 dark:bg-natural-accent/20 border border-natural-accent/30 dark:border-natural-accent/40 rounded-xl text-[9px] font-bold uppercase tracking-widest text-natural-accent hover:bg-natural-accent hover:text-white transition-all flex items-center gap-2 group/alt shadow-sm"
+                                    className="px-6 py-2.5 bg-natural-accent text-black font-bold uppercase tracking-widest text-[10px] rounded-full hover:opacity-90 transition-all flex items-center gap-2 group/alt shadow-[0_0_15px_rgba(202,255,51,0.3)]"
                                     title="Trouver une alternative"
                                   >
                                     {loadingAlternative === i ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      <Loader2 className="w-4 h-4 animate-spin" />
                                     ) : (
-                                      <Zap className="w-3.5 h-3.5 fill-current" />
+                                      <Zap className="w-4 h-4 fill-current" />
                                     )}
                                     <span>Alternative</span>
                                   </button>
 
                                   {/* Dock Vidéo/Image */}
-                                  <div className="flex bg-natural-subtle dark:bg-white/5 p-1 rounded-xl border border-stone-100 dark:border-white/5 gap-1 shadow-sm">
+                                  <div className="flex gap-2 shrink-0">
                                     {ex.youtubeUrl && (
                                       <a 
                                         href={ex.youtubeUrl} 
                                         target="_blank" 
                                         rel="noreferrer"
-                                        className="flex items-center justify-center w-8 h-8 rounded-lg bg-white dark:bg-natural-subtle text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors border border-stone-50 dark:border-white/5"
+                                        className="flex items-center justify-center w-10 h-10 rounded-full bg-natural-subtle dark:bg-white/5 text-stone-500 hover:text-red-500 transition-all border border-stone-200 dark:border-white/10 hover:border-red-500/50"
                                         title="Vidéo"
                                       >
-                                        <Youtube className="w-4 h-4" />
+                                        <Youtube className="w-5 h-5" />
                                       </a>
                                     )}
                                     {ex.googleImageUrl && (
@@ -753,23 +1159,23 @@ export default function App() {
                                         href={ex.googleImageUrl} 
                                         target="_blank" 
                                         rel="noreferrer"
-                                        className="flex items-center justify-center w-8 h-8 rounded-lg bg-white dark:bg-natural-subtle text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors border border-stone-50 dark:border-white/5"
+                                        className="flex items-center justify-center w-10 h-10 rounded-full bg-natural-subtle dark:bg-white/5 text-stone-500 hover:text-blue-500 transition-all border border-stone-200 dark:border-white/10 hover:border-blue-500/50"
                                         title="Images"
                                       >
-                                        <ImageIcon className="w-4 h-4" />
+                                        <ImageIcon className="w-5 h-5" />
                                       </a>
                                     )}
                                   </div>
 
                                   {/* Badges de stats - Harmonisation de la largeur */}
-                                  <div className="flex gap-2">
-                                    <div className="bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-xl text-center min-w-[64px] border border-blue-100 dark:border-blue-800 shadow-sm">
-                                      <span className="block text-[7px] font-bold uppercase tracking-tighter text-blue-400/80 dark:text-blue-400 mb-0.5">Séries</span>
-                                      <span className="font-bold text-blue-700 dark:text-blue-200 text-sm leading-none">{ex.sets}</span>
+                                  <div className="flex gap-3">
+                                    <div className="bg-natural-subtle dark:bg-transparent px-4 py-2 rounded-2xl text-center min-w-[70px] border-2 border-natural-accent shadow-[0_0_10px_rgba(202,255,51,0.1)]">
+                                      <span className="block text-[8px] font-black uppercase tracking-tighter text-natural-accent mb-0.5">Séries</span>
+                                      <span className="font-black text-natural-ink text-lg leading-none">{ex.sets}</span>
                                     </div>
-                                    <div className="bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-xl text-center min-w-[64px] border border-blue-100 dark:border-blue-800 shadow-sm">
-                                      <span className="block text-[7px] font-bold uppercase tracking-tighter text-blue-400/80 dark:text-blue-400 mb-0.5">Reps</span>
-                                      <span className="font-bold text-blue-700 dark:text-blue-200 text-sm leading-none">{ex.reps}</span>
+                                    <div className="bg-natural-subtle dark:bg-transparent px-4 py-2 rounded-2xl text-center min-w-[70px] border-2 border-natural-accent shadow-[0_0_10px_rgba(202,255,51,0.1)]">
+                                      <span className="block text-[8px] font-black uppercase tracking-tighter text-natural-accent mb-0.5">Reps</span>
+                                      <span className="font-black text-natural-ink text-lg leading-none">{ex.reps}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -777,39 +1183,113 @@ export default function App() {
                               
                               {/* Détails Techniques */}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                                <div className="space-y-2">
-                                  <label className="text-[9px] font-bold uppercase tracking-widest text-stone-400">Technique & Forme</label>
-                                  <p className="text-sm text-stone-600 leading-relaxed font-serif italic text-balance">{ex.form}</p>
+                                <div className="space-y-4">
+                                  <div className="space-y-3">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-stone-500 dark:text-stone-400">Technique & Forme</label>
+                                    <p className="text-sm text-stone-700 dark:text-stone-200 leading-relaxed font-serif italic text-balance">{ex.form}</p>
+                                  </div>
+                                  
+                                  {/* Suivi des poids */}
+                                  <div className="pt-4 border-t border-stone-100 dark:border-white/5">
+                                    <label className="block text-[10px] font-bold uppercase tracking-widest text-stone-500 dark:text-stone-400 mb-3">Suivi des poids (kg)</label>
+                                    <div className="flex flex-wrap gap-2 items-end">
+                                      {Array.from({ length: parseInt(ex.sets) || 1 }).map((_, setIdx) => (
+                                        <div key={setIdx} className="flex flex-col gap-1">
+                                          <div className="flex items-center justify-between px-1">
+                                            <span className="text-[9px] font-bold text-stone-400 dark:text-stone-500 uppercase">S{setIdx + 1}</span>
+                                            {ex.completedWeights?.[setIdx] && (
+                                              <CheckCircle2 className="w-2 h-2 text-natural-accent" />
+                                            )}
+                                          </div>
+                                          <input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={ex.completedWeights?.[setIdx] || ''}
+                                            onChange={(e) => updateWeight(i, setIdx, e.target.value)}
+                                            placeholder="—"
+                                            className={`w-12 h-10 bg-stone-50 dark:bg-white/5 border rounded-lg text-center text-xs font-bold focus:border-natural-accent outline-none transition-all ${
+                                              ex.completedWeights?.[setIdx] 
+                                              ? 'border-natural-accent/40 bg-natural-accent/5' 
+                                              : 'border-stone-100 dark:border-white/10'
+                                            }`}
+                                          />
+                                        </div>
+                                      ))}
+                                      <div className="flex items-center gap-2">
+                                      </div>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="space-y-2">
-                                  <label className="text-[9px] font-bold uppercase tracking-widest text-stone-400">Adaptation ({formData.experience})</label>
-                                  <p className="text-sm text-natural-accent/80 leading-relaxed">{ex.modifications}</p>
+                                <div className="space-y-3">
+                                  <label className="text-[10px] font-bold uppercase tracking-widest text-stone-500 dark:text-stone-400">Adaptation ({formData.experience})</label>
+                                  <p className="text-sm text-natural-accent dark:text-natural-accent font-medium leading-relaxed">{ex.modifications}</p>
                                 </div>
                               </div>
                             </div>
                           </div>
-                          <div className="bg-natural-subtle px-8 py-3 flex items-center gap-2 border-t border-stone-100">
-                            <Flame className="w-3 h-3 text-orange-400" />
-                            <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">Conseil : {ex.notes}</span>
+                          <div className="bg-natural-subtle dark:bg-white/5 px-8 py-3 flex items-center gap-2 border-t border-stone-100 dark:border-white/5">
+                            <Flame className="w-3.5 h-3.5 text-orange-500" />
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-stone-600 dark:text-stone-400">Conseil : {ex.notes}</span>
                           </div>
                         </motion.div>
                       ))}
                     </div>
                   </section>
+
+                  {/* Retour au calme */}
+                  {workout?.cooldown && workout.cooldown.length > 0 && (
+                    <section>
+                      <div className="flex items-center gap-4 mb-8">
+                        <div className="h-px bg-stone-100 dark:bg-white/5 flex-grow" />
+                        <div className="flex items-center gap-2 px-4 py-1.5 bg-teal-50 dark:bg-teal-900/20 rounded-full border border-teal-100 dark:border-teal-800">
+                          <CheckCircle2 className="w-4 h-4 text-teal-500" />
+                          <h3 className="text-[10px] font-bold uppercase tracking-[0.3em] text-teal-600 dark:text-teal-400 shrink-0">Retour au calme</h3>
+                        </div>
+                        <div className="h-px bg-stone-100 dark:bg-white/5 flex-grow" />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {workout.cooldown.map((step, i) => (
+                            <div key={`cooldown-${i}`} className="flex items-start justify-between gap-6 p-4 bg-stone-50 dark:bg-white/5 rounded-2xl border border-stone-200 dark:border-white/10 group hover:border-teal-300 transition-colors">
+                            <div className="flex items-center gap-4">
+                              <span className="flex items-center justify-center w-8 h-8 rounded-full bg-white dark:bg-white/10 text-xs font-black text-stone-500 dark:text-stone-400 group-hover:text-teal-500 transition-colors shadow-sm">
+                                {i + 1}
+                              </span>
+                              <p className="text-base font-bold text-stone-800 dark:text-white">{typeof step === 'string' ? step : step.name}</p>
+                            </div>
+
+                            {typeof step !== 'string' && (
+                              <div className="flex gap-2 shrink-0">
+                                {step.youtubeUrl && (
+                                  <a href={step.youtubeUrl} target="_blank" rel="noreferrer" className="w-10 h-10 rounded-full flex items-center justify-center bg-white dark:bg-white/10 text-stone-400 hover:text-red-500 transition-all border border-stone-100 dark:border-white/5 hover:border-red-500/50">
+                                    <Youtube className="w-5 h-5" />
+                                  </a>
+                                )}
+                                {step.googleImageUrl && (
+                                  <a href={step.googleImageUrl} target="_blank" rel="noreferrer" className="w-10 h-10 rounded-full flex items-center justify-center bg-white dark:bg-white/10 text-stone-400 hover:text-blue-500 transition-all border border-stone-100 dark:border-white/5 hover:border-blue-500/50">
+                                    <ImageIcon className="w-5 h-5" />
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                 </div>
 
                 <div className="mt-20 flex flex-col items-center">
                   <button 
                     onClick={finishSession}
-                    className="bg-natural-accent text-white px-16 py-6 rounded-full font-bold shadow-2xl hover:bg-zinc-800 transition-all active:scale-95 uppercase tracking-[0.3em] text-[10px] mb-4"
+                    className="bg-natural-accent text-black px-16 py-6 rounded-full font-black shadow-[0_0_30px_rgba(202,255,51,0.4)] hover:scale-105 active:scale-95 transition-all transition-all uppercase tracking-[0.3em] text-[11px] mb-4"
                   >
                     Séance Terminée
                   </button>
-                  <p className="text-stone-400 text-[10px] font-bold uppercase tracking-widest">Enregistrer & Quitter</p>
+                  <p className="text-stone-500 dark:text-stone-400 text-[11px] font-bold uppercase tracking-widest">Enregistrer & Quitter</p>
                 </div>
               </div>
             </motion.div>
-          )}
+          ))}
 
           {step === 'history' && (
             <motion.div
@@ -829,53 +1309,375 @@ export default function App() {
                 </button>
 
                 <header className="mb-12 border-b border-stone-100 pb-10">
-                  <h2 className="text-4xl font-serif font-medium text-natural-accent tracking-tight mb-2">Historique des Séances</h2>
-                  <p className="text-stone-400 text-sm">Retrouvez toutes vos performances passées en un clin d'œil.</p>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <h2 className="text-4xl font-serif font-medium text-natural-accent tracking-tight mb-2">Mon Journal</h2>
+                    
+                    <div className="flex flex-wrap bg-stone-100 dark:bg-white/5 p-1 rounded-2xl gap-1 w-full sm:w-auto">
+                      <button
+                        onClick={() => setHistoryTab('sessions')}
+                        className={`flex-1 sm:flex-none px-4 sm:px-6 py-2.5 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                          historyTab === 'sessions' 
+                          ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-black shadow-sm' 
+                          : 'text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200'
+                        }`}
+                      >
+                        Historique
+                      </button>
+                      <button
+                        onClick={() => setHistoryTab('favorites')}
+                        className={`flex-1 sm:flex-none px-4 sm:px-6 py-2.5 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                          historyTab === 'favorites' 
+                          ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-black shadow-sm' 
+                          : 'text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200'
+                        }`}
+                      >
+                        Favoris ({favorites.length})
+                      </button>
+                      <button
+                        onClick={() => setHistoryTab('stats')}
+                        className={`flex-1 sm:flex-none px-4 sm:px-6 py-2.5 text-[10px] sm:text-[11px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                          historyTab === 'stats' 
+                          ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-black shadow-sm' 
+                          : 'text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200'
+                        }`}
+                      >
+                        Stats
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-stone-600 dark:text-stone-400 text-sm">
+                    {historyTab === 'sessions' 
+                      ? "Retrouvez toutes vos performances passées en un clin d'œil." 
+                      : historyTab === 'favorites' 
+                      ? "Vos programmes préférés prêts à être relancés."
+                      : "Visualisez votre progression et vos efforts."}
+                  </p>
                 </header>
 
                 <div className="space-y-4">
-                  {history.length === 0 ? (
-                    <div className="text-center py-20 grayscale opacity-30">
-                      <History className="w-12 h-12 mx-auto mb-4" />
-                      <p className="font-serif italic font-medium">Aucune séance enregistrée pour le moment.</p>
-                    </div>
-                  ) : (
-                    history.map((h) => (
-                      <div 
-                        key={h.id}
-                        onClick={() => {
-                          setWorkout(h);
-                          setStep('workout');
-                        }}
-                        className="group flex flex-col md:flex-row md:items-center justify-between p-6 bg-natural-subtle hover:bg-white border border-transparent hover:border-natural-accent rounded-[32px] transition-all cursor-pointer shadow-sm hover:shadow-xl hover:shadow-stone-200/40"
-                      >
-                        <div className="text-left">
-                          <div className="flex items-center gap-3 mb-2">
-                             <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{h.date}</span>
-                             <div className="w-1 h-1 rounded-full bg-stone-200" />
-                             <span className="text-[10px] font-bold text-natural-accent uppercase tracking-widest">{h.params.goal}</span>
+                  {historyTab === 'sessions' ? (
+                    history.length === 0 ? (
+                      <div className="text-center py-20 grayscale opacity-30">
+                        <History className="w-12 h-12 mx-auto mb-4" />
+                        <p className="font-serif italic font-medium">Aucune séance enregistrée pour le moment.</p>
+                      </div>
+                    ) : (
+                      history.map((h) => (
+                        <div 
+                          key={h.id}
+                          onClick={() => {
+                            setWorkout(h);
+                            setStep('workout');
+                          }}
+                          className="group flex flex-col md:flex-row md:items-center justify-between p-6 bg-natural-subtle dark:bg-white/5 hover:bg-stone-100 dark:hover:bg-white/10 border border-transparent hover:border-natural-accent rounded-[32px] transition-all cursor-pointer shadow-sm hover:shadow-xl hover:shadow-stone-200/40"
+                        >
+                          <div className="text-left">
+                            <div className="flex items-center gap-3 mb-2">
+                               <span className="text-[11px] font-bold text-stone-500 dark:text-stone-400 uppercase tracking-widest">{h.date}</span>
+                               <div className="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600" />
+                               <span className="text-[11px] font-bold text-natural-accent uppercase tracking-widest">{h.params.goal}</span>
+                            </div>
+                            <h4 className="text-xl font-serif font-medium text-natural-ink dark:text-white">{h.title}</h4>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              {h.exercises.map((e, idx) => (
+                                <div key={`${h.id}-ex-${idx}`} className="flex items-center gap-1.5 px-2 py-0.5 bg-stone-100 dark:bg-white/10 rounded-md text-[8px] font-medium text-stone-500 dark:text-stone-400 uppercase border border-stone-100 dark:border-white/5">
+                                  <span>{e.name}</span>
+                                  {e.completedWeights && (
+                                    <Award className="w-2.5 h-2.5 text-blue-400" />
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <h4 className="text-xl font-serif font-medium text-natural-ink">{h.title}</h4>
-                          <p className="text-xs text-stone-400 mt-1 truncate max-w-md">{h.params.targetMuscles.join(', ') || 'Corps complet'}</p>
+                          <div className="flex items-center gap-4 mt-4 md:mt-0 justify-between md:justify-end">
+                            <div className="flex flex-col items-end gap-1">
+                               <div className="flex -space-x-2">
+                                  <div className="px-3 py-1 bg-white dark:bg-natural-accent/30 border border-stone-200 dark:border-white/10 rounded-lg text-[10px] font-bold uppercase tracking-tighter text-stone-600 dark:text-stone-300 shadow-sm z-10 uppercase">
+                                    {h.params.intensity}
+                                  </div>
+                                  <div className="px-3 py-1 bg-white dark:bg-natural-accent/30 border border-stone-200 dark:border-white/10 rounded-lg text-[10px] font-bold uppercase tracking-tighter text-stone-600 dark:text-stone-300 shadow-sm">
+                                    {h.params.duration} min
+                                  </div>
+                               </div>
+                               {(h as any).volume > 0 && (
+                                 <div className="flex items-center gap-2 text-[9px] font-black uppercase text-natural-accent tracking-widest mt-1">
+                                   <TrendingUp className="w-3 h-3" />
+                                   <span>{(h as any).volume} kg</span>
+                                   {(h as any).avgRpe && (
+                                     <>
+                                       <span className="text-white/20">•</span>
+                                       <span>RPE {(h as any).avgRpe}</span>
+                                     </>
+                                   )}
+                                 </div>
+                               )}
+                            </div>
+                            <button 
+                              onClick={(e) => deleteFromHistory(h.id, e)}
+                              className="p-2 text-stone-400 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-4 mt-4 md:mt-0 justify-between md:justify-end">
-                          <div className="flex -space-x-2">
-                             <div className="px-3 py-1 bg-white dark:bg-natural-accent/20 border border-stone-100 dark:border-white/5 rounded-lg text-[8px] font-bold uppercase tracking-tighter text-stone-400 dark:text-stone-300 shadow-sm z-10 uppercase">
-                               {h.params.intensity}
-                             </div>
-                             <div className="px-3 py-1 bg-white dark:bg-natural-accent/20 border border-stone-100 dark:border-white/5 rounded-lg text-[8px] font-bold uppercase tracking-tighter text-stone-400 dark:text-stone-300 shadow-sm">
-                               {h.params.duration} min
-                             </div>
+                      ))
+                    )
+                  ) : historyTab === 'favorites' ? (
+                    favorites.length === 0 ? (
+                      <div className="text-center py-20 grayscale opacity-30">
+                        <Star className="w-12 h-12 mx-auto mb-4" />
+                        <p className="font-serif italic font-medium">Enregistrez un programme pour le retrouver ici.</p>
+                      </div>
+                    ) : (
+                      favorites.map((f) => (
+                        <div 
+                          key={f.id}
+                          onClick={() => {
+                            setWorkout({
+                              ...f,
+                              id: crypto.randomUUID(), // Nouveau ID pour une nouvelle séance
+                              date: new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
+                            });
+                            setStep('workout');
+                          }}
+                          className="group flex flex-col md:flex-row md:items-center justify-between p-6 bg-natural-accent/5 hover:bg-natural-accent/10 border border-natural-accent/20 hover:border-natural-accent rounded-[32px] transition-all cursor-pointer shadow-sm hover:shadow-[0_0_20px_rgba(202,255,51,0.1)]"
+                        >
+                          <div className="text-left">
+                            <div className="flex items-center gap-3 mb-2">
+                               <span className="text-[10px] font-bold text-natural-accent uppercase tracking-widest">Programme Enregistré</span>
+                               <div className="w-1.5 h-1.5 rounded-full bg-natural-accent/30" />
+                               <span className="text-[10px] font-bold text-natural-ink/60 dark:text-white/60 uppercase tracking-widest">{f.params.goal}</span>
+                            </div>
+                            <h4 className="text-xl font-serif font-medium text-natural-ink dark:text-white">{f.title}</h4>
+                            <p className="text-xs text-stone-600 dark:text-stone-400 mt-1 truncate max-w-sm">{f.description}</p>
                           </div>
-                          <button 
-                            onClick={(e) => deleteFromHistory(h.id, e)}
-                            className="p-2 text-stone-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-4 mt-4 md:mt-0 justify-between md:justify-end">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFavorites(prev => prev.filter(fav => fav.id !== f.id));
+                              }}
+                              className="p-2 text-stone-400 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                            <div className="px-8 py-3 bg-natural-accent text-black rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg group-hover:scale-105 transition-transform">
+                              Lancer
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )
+                  ) : (
+                    <div className="space-y-12">
+                      {/* Dashboard Stats */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-natural-subtle dark:bg-stone-900/50 p-6 rounded-[32px] border border-stone-100 dark:border-white/5 shadow-sm">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">Séances</p>
+                          <p className="text-4xl font-black text-natural-accent tabular-nums">{history.length}</p>
+                        </div>
+                        <div className="bg-natural-subtle dark:bg-stone-900/50 p-6 rounded-[32px] border border-stone-100 dark:border-white/5 shadow-sm">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">Favoris</p>
+                          <p className="text-4xl font-black text-natural-accent tabular-nums">{favorites.length}</p>
+                        </div>
+                        <div className="bg-natural-subtle dark:bg-stone-900/50 p-6 rounded-[32px] border border-stone-100 dark:border-white/5 shadow-sm">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">Minutes</p>
+                          <p className="text-4xl font-black text-natural-accent tabular-nums">
+                            {history.reduce((acc, h) => acc + parseInt(h.params.duration || '0'), 0)}
+                          </p>
+                        </div>
+                        <div className="bg-natural-subtle dark:bg-stone-900/50 p-6 rounded-[32px] border border-stone-100 dark:border-white/5 shadow-sm">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-stone-400 mb-2">Séries Tot.</p>
+                          <p className="text-4xl font-black text-natural-accent tabular-nums">
+                            {history.reduce((acc, h) => acc + h.exercises.reduce((exAcc, ex) => exAcc + (parseInt(ex.sets) || 0), 0), 0)}
+                          </p>
                         </div>
                       </div>
-                    ))
+
+                      {/* Distribution de l'Intensité */}
+                      <div className="bg-white dark:bg-stone-900/40 p-8 rounded-[40px] border border-stone-100 dark:border-white/5 shadow-xl shadow-stone-200/20">
+                         <div className="flex items-center justify-between mb-8">
+                            <h3 className="text-sm font-black uppercase tracking-[0.2em] text-stone-500 flex items-center gap-2">
+                               <Activity className="w-4 h-4 text-natural-accent" />
+                               Intensité des Séances
+                            </h3>
+                         </div>
+                         <div className="h-[250px] w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                               <LineChart data={history.slice(-10).map((h, i) => ({
+                                  name: h.date?.split(' ')[0] || `S${i}`,
+                                  intensity: h.params.intensity === 'faible' ? 1 : h.params.intensity === 'modérée' ? 2 : 3,
+                                  duration: parseInt(h.params.duration || '0')
+                               }))}>
+                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
+                                  <XAxis dataKey="name" fontSize={10} axisLine={false} tickLine={false} />
+                                  <YAxis hide domain={[0, 4]} />
+                                  <Tooltip 
+                                    contentStyle={{ backgroundColor: '#1E1E1E', border: 'none', borderRadius: '16px', fontSize: '10px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}
+                                    itemStyle={{ color: '#ACE149' }}
+                                  />
+                                  <Line 
+                                    type="monotone" 
+                                    dataKey="intensity" 
+                                    stroke="#ACE149" 
+                                    strokeWidth={4} 
+                                    dot={{ fill: '#ACE149', strokeWidth: 2, r: 4, stroke: '#fff' }}
+                                    activeDot={{ r: 8, strokeWidth: 0 }}
+                                  />
+                               </LineChart>
+                            </ResponsiveContainer>
+                         </div>
+                         <div className="flex justify-center gap-6 mt-6">
+                            <div className="flex items-center gap-2">
+                               <div className="w-2.5 h-2.5 rounded-full bg-natural-accent opacity-30" />
+                               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-tighter">1: Faible</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                               <div className="w-2.5 h-2.5 rounded-full bg-natural-accent opacity-60" />
+                               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-tighter">2: Modérée</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                               <div className="w-2.5 h-2.5 rounded-full bg-natural-accent" />
+                               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-tighter">3: Élevée</span>
+                            </div>
+                         </div>
+                      </div>
+
+                      {/* Muscle Distribution & sets per session */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white dark:bg-stone-900/40 p-8 rounded-[40px] border border-stone-100 dark:border-white/5 shadow-xl shadow-stone-200/20">
+                          <h3 className="text-sm font-black uppercase tracking-[0.2em] text-stone-500 mb-8 flex items-center gap-2">
+                             <PieChartIcon className="w-4 h-4 text-natural-accent" />
+                             Répartition des Muscles
+                          </h3>
+                          <div className="h-[250px] w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie
+                                  data={Object.entries(
+                                    history.reduce((acc: any, h) => {
+                                      h.params.targetMuscles?.forEach(m => acc[m] = (acc[m] || 0) + 1);
+                                      return acc;
+                                    }, {})
+                                  ).map(([name, value]) => ({ name, value }))}
+                                  cx="50%"
+                                  cy="50%"
+                                  innerRadius={70}
+                                  outerRadius={90}
+                                  paddingAngle={8}
+                                  dataKey="value"
+                                >
+                                  {Object.entries(history.reduce((acc: any, h) => {
+                                    h.params.targetMuscles?.forEach(m => acc[m] = (acc[m] || 0) + 1);
+                                    return acc;
+                                  }, {})).map((_, index) => (
+                                    <Cell key={`cell-${index}`} fill={index === 0 ? '#ACE149' : `rgba(172, 225, 73, ${1 - index * 0.15})`} />
+                                  ))}
+                                </Pie>
+                                <Tooltip 
+                                  contentStyle={{ backgroundColor: '#1E1E1E', border: 'none', borderRadius: '16px', fontSize: '10px' }}
+                                />
+                              </PieChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4 mt-8">
+                             {Object.entries(
+                               history.reduce((acc: any, h) => {
+                                 h.params.targetMuscles?.forEach(m => acc[m] = (acc[m] || 0) + 1);
+                                 return acc;
+                               }, {})
+                             ).sort((a: any, b: any) => b[1] - a[1]).slice(0, 4).map(([muscle, count]) => (
+                               <div key={String(muscle)} className="flex items-center gap-3 p-3 bg-stone-50 dark:bg-white/5 rounded-2xl border border-stone-100 dark:border-white/5">
+                                 <div className="w-2 h-2 rounded-full bg-natural-accent" />
+                                 <div className="flex-1">
+                                   <p className="text-[10px] font-black uppercase text-stone-500 tracking-tighter">{muscle as string}</p>
+                                   <p className="text-xs font-bold text-stone-800 dark:text-stone-200">{count as number} sessions</p>
+                                 </div>
+                               </div>
+                             ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-white dark:bg-stone-900/40 p-8 rounded-[40px] border border-stone-100 dark:border-white/5 shadow-xl shadow-stone-200/20">
+                          <h3 className="text-sm font-black uppercase tracking-[0.2em] text-stone-500 mb-8 flex items-center gap-2">
+                             <TrendingUp className="w-4 h-4 text-natural-accent" />
+                             Volume de Travail
+                          </h3>
+                          <div className="h-[250px] w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={history.slice(-8).map((h, i) => ({
+                                name: `S${history.length - history.slice(-8).length + i + 1}`,
+                                sets: h.exercises.reduce((acc, e) => acc + (parseInt(e.sets) || 0), 0)
+                              }))}>
+                                <XAxis dataKey="name" fontSize={10} axisLine={false} tickLine={false} />
+                                <Tooltip 
+                                  contentStyle={{ backgroundColor: '#1E1E1E', border: 'none', borderRadius: '16px', fontSize: '10px' }}
+                                  cursor={{ fill: 'rgba(202, 255, 51, 0.05)' }}
+                                />
+                                <Bar dataKey="sets" fill="#ACE149" radius={[6, 6, 0, 0]} barSize={32} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <div className="mt-8 p-4 bg-natural-accent/5 rounded-[24px] border border-natural-accent/10">
+                            <p className="text-[10px] font-bold text-natural-accent uppercase tracking-widest text-center mb-1">Analyse du Volume</p>
+                            <p className="text-xs text-stone-600 dark:text-stone-400 text-center italic">
+                              {history.length > 1 
+                                ? `Volume moyen de ${(history.reduce((acc, h) => acc + h.exercises.reduce((exAcc, ex) => exAcc + (parseInt(ex.sets) || 0), 0), 0) / history.length).toFixed(1)} séries par séance.`
+                                : "Continuez vos séances pour voir votre volume moyen apparaître."}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Progression des Poids sur les Exercices Phares */}
+                      <div className="bg-natural-ink text-white p-8 md:p-12 rounded-[48px] shadow-2xl relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-64 h-64 bg-natural-accent/10 rounded-full blur-[100px] -mr-32 -mt-32" />
+                        
+                        <div className="relative z-10">
+                           <h3 className="text-xl font-serif mb-8 flex items-center gap-3">
+                              <LineChartIcon className="w-6 h-6 text-natural-accent" />
+                              Evolution des Performances
+                           </h3>
+                           
+                           {history.length < 2 ? (
+                             <div className="py-12 text-center opacity-50 italic text-stone-400">
+                               Plus de données nécessaires pour afficher la courbe de progression.
+                             </div>
+                           ) : (
+                             <div className="space-y-12">
+                               {/* We'll pick a few common exercises to track */}
+                               {['Développé Couché', 'Squat', 'Deadlift'].map(exName => {
+                                 const logs = history.filter(h => h.exercises?.some(e => e.name.toLowerCase().includes(exName.toLowerCase())))
+                                   .map(h => {
+                                      const ex = h.exercises.find(e => e.name.toLowerCase().includes(exName.toLowerCase()));
+                                      const maxWeight = Math.max(...(ex?.completedWeights?.filter(w => w !== '' && !isNaN(parseFloat(w))).map(w => parseFloat(w)) || [0]));
+                                      return { date: h.date?.split(' ')[0] || '', weight: maxWeight };
+                                   }).filter(l => l.weight > 0);
+                                 
+                                 if (logs.length < 2) return null;
+
+                                 return (
+                                   <div key={exName} className="space-y-4">
+                                      <div className="flex justify-between items-end">
+                                         <p className="text-xs font-black uppercase tracking-[0.2em] text-natural-accent">{exName}</p>
+                                         <p className="text-2xl font-black tabular-nums">{logs[logs.length-1].weight} kg</p>
+                                      </div>
+                                      <div className="h-[120px] w-full">
+                                         <ResponsiveContainer width="100%" height="100%">
+                                            <LineChart data={logs}>
+                                               <Line type="stepAfter" dataKey="weight" stroke="#ACE149" strokeWidth={3} dot={{ fill: '#ACE149', r: 3 }} />
+                                               <Tooltip contentStyle={{ display: 'none' }} />
+                                            </LineChart>
+                                         </ResponsiveContainer>
+                                      </div>
+                                   </div>
+                                 );
+                               })}
+                             </div>
+                           )}
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
@@ -883,10 +1685,18 @@ export default function App() {
           )}
         </AnimatePresence>
       </div>
-      <footer className="w-full text-center py-10 opacity-40">
-        <p className="font-serif italic text-sm tracking-widest">
-          Powered by <span className="font-bold uppercase not-italic text-natural-accent">EL BOUZZAOUI</span>
-        </p>
+
+      <footer className="w-full text-center py-10 space-y-4">
+                    <button 
+                      onClick={() => setStep('history')}
+                      className="text-[10px] font-black uppercase tracking-[0.2em] text-stone-400 hover:text-natural-accent transition-colors"
+                    >
+                      Voir mon historique
+                    </button>
+                    <p className="text-stone-600 dark:text-stone-400 text-sm flex items-center justify-center gap-2 opacity-60">
+                      <span className="font-black uppercase not-italic text-natural-accent tracking-tighter text-2xl drop-shadow-[0_0_8px_rgba(202,255,51,0.3)]">Repz</span>
+                      <span className="text-xs">by EL BOUZZAOUI</span>
+                    </p>
       </footer>
     </div>
   );
