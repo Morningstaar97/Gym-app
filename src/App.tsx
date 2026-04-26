@@ -40,7 +40,10 @@ import {
   Minimize2,
   ChevronLeft,
   ChevronRight,
-  ClipboardList
+  ClipboardList,
+  LogOut,
+  LogIn,
+  CloudOff
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -57,6 +60,61 @@ import {
   CartesianGrid,
   Legend
 } from 'recharts';
+import { auth, db, signInWithGoogle } from './lib/firebase';
+import { 
+  onAuthStateChanged, 
+  signOut,
+  User as FirebaseUser 
+} from 'firebase/auth';
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  collection, 
+  query, 
+  orderBy, 
+  deleteDoc,
+  serverTimestamp,
+  getDocFromServer
+} from 'firebase/firestore';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 type Goal = 'perdrePoids' | 'prendreMuscle' | 'gagnerForce';
 type Intensity = 'faible' | 'modérée' | 'élevée';
@@ -105,7 +163,10 @@ interface WorkoutPlan {
   warmup: ExerciseStep[];
   cooldown: ExerciseStep[];
   params: UserData;
-  isFavorite?: boolean; // Pour les programmes enregistrés
+  isFavorite?: boolean; 
+  avgRpe?: string;
+  volume?: number;
+  createdAt?: string | any; // Any for FieldValue
 }
 
 const MUSCLE_GROUPS = [
@@ -115,8 +176,53 @@ const MUSCLE_GROUPS = [
 ];
 
 export default function App() {
-  const [step, setStep] = useState<'info' | 'workout' | 'history'>('info'); // Nouveau: étape historique
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [step, setStep] = useState<'info' | 'workout' | 'history'>('info');
   const [loading, setLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [triviaIndex, setTriviaIndex] = useState(0);
+
+  const triviaFacts = [
+    "Le cœur est le muscle le plus puissant du corps humain par rapport à sa taille.",
+    "S'étirer après une séance aide à réduire les courbatures et améliore la récupération.",
+    "L'hydratation est cruciale : une perte de 2% d'eau peut réduire vos performances de 20%.",
+    "Le muscle le plus long du corps est le couturier (sartorius), situé dans la cuisse.",
+    "Soulever des poids renforce non seulement les muscles, mais aussi la densité osseuse.",
+    "Le sommeil est le moment où vos muscles se réparent et se construisent réellement.",
+    "Faire de l'exercice libère des endorphines, les hormones du bonheur.",
+    "Le muscle grand fessier est le plus volumineux du corps humain.",
+    "La régularité bat l'intensité : 30 min par jour valent mieux qu'une séance de 4h par semaine.",
+    "Vos muscles brûlent des calories même au repos, contrairement à la masse grasse."
+  ];
+
+  // Logic for loading progress and trivia
+  useEffect(() => {
+    let interval: any;
+    let triviaInterval: any;
+    if (loading) {
+      setLoadingProgress(0);
+      setTriviaIndex(Math.floor(Math.random() * triviaFacts.length));
+      
+      interval = setInterval(() => {
+        setLoadingProgress(prev => {
+          if (prev >= 95) return prev;
+          return prev + (100 - prev) * 0.1;
+        });
+      }, 300);
+
+      triviaInterval = setInterval(() => {
+        setTriviaIndex(prev => (prev + 1) % triviaFacts.length);
+      }, 4000);
+    } else {
+      setLoadingProgress(100);
+    }
+    return () => {
+      clearInterval(interval);
+      clearInterval(triviaInterval);
+    };
+  }, [loading]);
+
   const [loadingAlternative, setLoadingAlternative] = useState<number | null>(null);
   const [workout, setWorkout] = useState<WorkoutPlan | null>(null);
   const [history, setHistory] = useState<WorkoutPlan[]>(() => {
@@ -175,9 +281,127 @@ export default function App() {
 
   const [historyTab, setHistoryTab] = useState<'sessions' | 'favorites' | 'stats'>('sessions');
   const [focusedExerciseIndex, setFocusedExerciseIndex] = useState<number | null>(null);
+  // Centralized Error Handler for Firestore
+  const handleFirestoreError = (error: any, operationType: 'create' | 'update' | 'delete' | 'list' | 'get' | 'write', path: string | null) => {
+    const errInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+      },
+      operationType,
+      path
+    };
+    console.error('Firestore Error:', JSON.stringify(errInfo));
+  };
 
   // Initialisation IA
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  // Initialisation Auth et Test Connection
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if(error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
+      }
+    };
+    testConnection();
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Synchronisation avec Firestore
+  useEffect(() => {
+    if (authLoading) return;
+
+    if (!user) {
+      // Pas d'utilisateur : on recharge les données locales
+      const savedProfile = localStorage.getItem('repz_profile') || localStorage.getItem('fitfocus_profile');
+      if (savedProfile) setProfile(JSON.parse(savedProfile));
+      
+      const savedHistory = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
+      if (savedHistory) setHistory(JSON.parse(savedHistory));
+      
+      const savedFavs = localStorage.getItem('repz_favorites') || localStorage.getItem('fitfocus_favorites');
+      if (savedFavs) setFavorites(JSON.parse(savedFavs));
+      
+      return;
+    }
+
+    const syncData = async () => {
+      try {
+        // 1. Profil
+        const profileDocRef = doc(db, 'users', user.uid);
+        const profileDoc = await getDoc(profileDocRef);
+        
+        if (profileDoc.exists()) {
+          setProfile(profileDoc.data() as any);
+        } else {
+          // Migration: Si l'utilisateur n'a pas encore de profil sur Firestore, on l'upload
+          const localProfileStr = localStorage.getItem('repz_profile') || localStorage.getItem('fitfocus_profile');
+          if (localProfileStr) {
+            const profileData = JSON.parse(localProfileStr);
+            await setDoc(profileDocRef, { ...profileData, updatedAt: serverTimestamp() })
+              .catch(err => handleFirestoreError(err, 'write', `users/${user.uid}`));
+            setProfile(profileData);
+          }
+        }
+
+        // 2. Historique & Migration
+        const historyCollRef = collection(db, 'users', user.uid, 'history');
+        const historySnap = await getDocs(historyCollRef);
+        const remoteHistory = historySnap.docs.map(d => d.data() as WorkoutPlan);
+
+        if (remoteHistory.length === 0) {
+          // Migration de l'historique local vers Firestore
+          const localHistoryStr = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
+          if (localHistoryStr) {
+            const localHistory: WorkoutPlan[] = JSON.parse(localHistoryStr);
+            const uploadPromises = localHistory.map(w => 
+              setDoc(doc(historyCollRef, w.id), { ...w, createdAt: w.createdAt || serverTimestamp() })
+            );
+            await Promise.all(uploadPromises);
+            setHistory(localHistory);
+          }
+        } else {
+          // On trie par date si distant
+          const sortedRemote = [...remoteHistory].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          setHistory(sortedRemote);
+        }
+
+        // 3. Favoris & Migration
+        const favsCollRef = collection(db, 'users', user.uid, 'favorites');
+        const favsSnap = await getDocs(favsCollRef);
+        const remoteFavs = favsSnap.docs.map(d => d.data() as WorkoutPlan);
+
+        if (remoteFavs.length === 0) {
+          const localFavsStr = localStorage.getItem('repz_favorites');
+          if (localFavsStr) {
+            const localFavs: WorkoutPlan[] = JSON.parse(localFavsStr);
+            const uploadPromises = localFavs.map(w => setDoc(doc(favsCollRef, w.id), w));
+            await Promise.all(uploadPromises);
+            setFavorites(localFavs);
+          }
+        } else {
+          setFavorites(remoteFavs);
+        }
+
+      } catch (err) {
+        console.error("Erreur lors de la synchronisation Firestore:", err);
+      }
+    };
+
+    syncData();
+  }, [user]);
 
   // Sauvegarder automatiquement les champs du profil dans localStorage en temps réel
   useEffect(() => {
@@ -191,6 +415,13 @@ export default function App() {
       focus: formData.focus
     };
     localStorage.setItem('repz_profile', JSON.stringify(profileToSave));
+
+    if (user && formData.firstName && formData.age) {
+       setDoc(doc(db, 'users', user.uid), {
+         ...profileToSave,
+         updatedAt: serverTimestamp()
+       }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`));
+    }
   }, [
     formData.firstName, 
     formData.age, 
@@ -198,7 +429,8 @@ export default function App() {
     formData.experience, 
     formData.equipment, 
     formData.goal, 
-    formData.focus
+    formData.focus,
+    user
   ]);
 
   // Sauvegarder l'historique et les favoris quand ils changent
@@ -222,6 +454,18 @@ export default function App() {
         ? prev.targetMuscles.filter(m => m !== muscle)
         : [...prev.targetMuscles, muscle]
     }));
+  };
+
+  const safeSignIn = async () => {
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      if (err.code === 'auth/popup-closed-by-user') {
+        console.log("Connexion annulée par l'utilisateur.");
+        return;
+      }
+      console.error("Erreur de connexion:", err);
+    }
   };
 
   const generateWorkout = async () => {
@@ -369,17 +613,26 @@ Le JSON doit être propre, sans texte avant ou après.`;
     setWorkout({ ...workout, exercises: updatedExercises });
   };
 
-  const toggleFavorite = () => {
+  const toggleFavorite = async () => {
     if (!workout) return;
     const isFav = favorites.some(f => f.id === workout.id);
     if (isFav) {
       setFavorites(prev => prev.filter(f => f.id !== workout.id));
+      if (user) {
+        await deleteDoc(doc(db, 'users', user.uid, 'favorites', workout.id))
+          .catch(err => handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/favorites/${workout.id}`));
+      }
     } else {
-      setFavorites(prev => [...prev, { ...workout, isFavorite: true }]);
+      const newFav = { ...workout, isFavorite: true };
+      setFavorites(prev => [...prev, newFav]);
+      if (user) {
+        await setDoc(doc(db, 'users', user.uid, 'favorites', workout.id), newFav)
+          .catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/favorites/${workout.id}`));
+      }
     }
   };
 
-  const finishSession = () => {
+  const finishSession = async () => {
     if (!workout) return;
     
     // Calculer les stats de session
@@ -418,9 +671,19 @@ Le JSON doit être propre, sans texte avant ou après.`;
         year: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
-      })
+      }),
+      createdAt: new Date().toISOString() // ISO string for local history, Firestore uses serverTimestamp
     };
+
     setHistory(prev => [completedWorkout, ...prev]);
+
+    if (user) {
+      await setDoc(doc(db, 'users', user.uid, 'history', completedWorkout.id), {
+        ...completedWorkout,
+        createdAt: serverTimestamp()
+      }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/history/${completedWorkout.id}`));
+    }
+
     setStep('history');
     setFocusedExerciseIndex(null);
   };
@@ -495,19 +758,73 @@ Le JSON doit être propre, sans texte avant ou après.`;
     }
   };
 
-  const deleteFromHistory = (id: string, e: React.MouseEvent) => {
+  const deleteFromHistory = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setHistory(prev => prev.filter(w => w.id !== id));
+    if (user) {
+      await deleteDoc(doc(db, 'users', user.uid, 'history', id))
+        .catch(err => handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/history/${id}`));
+    }
   };
 
   return (
     <div className="min-h-[100dvh] bg-natural-bg text-natural-ink font-sans selection:bg-natural-highlight flex flex-col transition-colors duration-300 overflow-x-hidden">
       {/* Salutation du haut */}
       <div className="w-full bg-white/80 dark:bg-natural-bg/80 backdrop-blur-md border-b border-stone-200 dark:border-white/10 safe-p-top sticky top-0 z-50 transition-colors">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-2 sm:py-3 flex items-center justify-center relative min-h-[50px] sm:min-h-[64px]">
-          <button onClick={reset} className="flex flex-col items-center border-none bg-transparent cursor-pointer group">
-            <span className="text-xl sm:text-2xl font-black uppercase tracking-tighter text-natural-accent leading-none group-hover:scale-105 transition-transform drop-shadow-[0_0_12px_rgba(202,255,51,0.4)]">Repz</span>
-          </button>
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-2 sm:py-3 flex items-center justify-between relative min-h-[50px] sm:min-h-[64px]">
+          <div className="flex items-center gap-1 sm:gap-2">
+             {(step !== 'info' && !loading) && (
+               <motion.button 
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setStep('info')}
+                className="p-1 sm:p-2 hover:bg-stone-100 dark:hover:bg-white/5 rounded-full transition-all text-stone-400 hover:text-natural-accent -ml-2"
+                aria-label="Retour au profil"
+                title="Retour"
+               >
+                 <ChevronLeft className="w-6 h-6" />
+               </motion.button>
+             )}
+             <button onClick={reset} className="flex items-center gap-2 border-none bg-transparent cursor-pointer group">
+               <span className="text-xl sm:text-2xl font-black uppercase tracking-tighter text-natural-accent leading-none group-hover:scale-105 transition-transform drop-shadow-[0_0_12px_rgba(202,255,51,0.4)]">Repz</span>
+             </button>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-4">
+            {authLoading ? (
+              <Loader2 className="w-5 h-5 animate-spin text-stone-400" />
+            ) : user ? (
+              <div className="flex items-center gap-3">
+                <div className="hidden md:flex flex-col items-end">
+                  <span className="text-[8px] font-black uppercase tracking-widest text-natural-accent">Sync Cloud Active</span>
+                  <span className="text-[10px] font-bold opacity-60 truncate max-w-[120px]">{user.displayName || user.email}</span>
+                </div>
+                {user.photoURL && (
+                  <img src={user.photoURL} alt={user.displayName || ''} className="w-8 h-8 rounded-full border border-natural-accent/30 shadow-[0_0_10px_rgba(202,255,51,0.2)]" referrerPolicy="no-referrer" />
+                )}
+                <button 
+                  onClick={() => signOut(auth)}
+                  className="group flex items-center gap-2 p-2 hover:bg-red-500/10 rounded-full transition-all"
+                  title="Se déconnecter"
+                >
+                  <LogOut className="w-5 h-5 text-stone-400 group-hover:text-red-500" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 bg-stone-100 dark:bg-white/5 border border-stone-200 dark:border-white/10 rounded-full text-[9px] font-black uppercase tracking-widest text-stone-400">
+                  <div className="w-1 h-1 bg-stone-400 rounded-full" />
+                  Mode Invité
+                </span>
+                <button 
+                  onClick={safeSignIn}
+                  className="flex items-center gap-2 px-4 py-2 bg-natural-accent text-black font-bold rounded-full text-[10px] uppercase tracking-widest hover:scale-105 transition-all shadow-lg shadow-natural-accent/30 active:scale-95"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Connexion</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -524,6 +841,18 @@ Le JSON doit être propre, sans texte avant ou après.`;
               <div className="p-6 sm:p-8 md:p-12 pb-0">
                 <header className="mb-8 md:mb-10 text-center md:text-left flex flex-col md:flex-row justify-between items-center gap-6">
                   <div className="flex-grow">
+                    {profile && showProfileEdit && (
+                      <motion.button 
+                        whileHover={{ x: -4 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => setShowProfileEdit(false)}
+                        aria-label="Annuler la modification du profil"
+                        className="flex items-center gap-2 text-stone-400 hover:text-natural-accent transition-all mb-4 group"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        <span className="text-[10px] font-black uppercase tracking-widest">Retour</span>
+                      </motion.button>
+                    )}
                     <h1 className="text-3xl sm:text-4xl font-serif font-medium text-natural-accent mb-2 tracking-tight">
                       {(!profile || showProfileEdit) ? "Votre Profil" : "Ma Séance"}
                     </h1>
@@ -585,18 +914,25 @@ Le JSON doit être propre, sans texte avant ou après.`;
                                   className="w-full bg-natural-subtle dark:bg-white/5 border-b-2 border-stone-100 dark:border-white/10 px-3 py-4 focus:border-natural-accent outline-none transition-all placeholder:text-stone-300 dark:placeholder:text-stone-600"
                                 />
                               </div>
-                              <div className="flex bg-stone-50 dark:bg-white/5 p-1 rounded-2xl gap-1">
+                              <div className="flex bg-stone-50 dark:bg-white/5 p-1 rounded-2xl gap-1 relative overflow-hidden">
                                 {(['homme', 'femme'] as const).map((g) => (
                                   <button
                                     key={g}
                                     onClick={() => setFormData(prev => ({ ...prev, gender: g }))}
-                                    className={`flex-1 min-h-[44px] py-1 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all ${
+                                    className={`relative flex-1 min-h-[44px] py-1 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all duration-300 ${
                                       formData.gender === g 
-                                        ? 'bg-white dark:bg-natural-accent text-natural-accent dark:text-white shadow-sm' 
+                                        ? 'text-natural-accent dark:text-stone-900' 
                                         : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
                                     }`}
                                   >
-                                    {g}
+                                    {formData.gender === g && (
+                                      <motion.div 
+                                        layoutId="genderHighlight"
+                                        className="absolute inset-0 bg-white dark:bg-natural-accent rounded-xl shadow-sm"
+                                        transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
+                                      />
+                                    )}
+                                    <span className="relative z-10">{g}</span>
                                   </button>
                                 ))}
                               </div>
@@ -604,30 +940,30 @@ Le JSON doit être propre, sans texte avant ou après.`;
                           </div>
                         </section>
 
-                        <section>
-                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Environnement</label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-1 gap-2">
-                            {[
-                              { id: 'maison', label: 'À la maison', icon: '🏠' },
-                              { id: 'typique', label: 'Salle standard', icon: '🏢' },
-                              { id: 'professionnel', label: 'Salle pro / Club', icon: '💎' }
-                            ].map((env) => (
-                              <button
-                                key={env.id}
-                                onClick={() => setFormData(prev => ({ ...prev, equipment: env.id as Equipment }))}
-                                className={`flex items-center gap-4 p-3 rounded-2xl border transition-all ${
-                                  formData.equipment === env.id 
-                                  ? 'border-natural-accent bg-natural-subtle dark:bg-natural-accent/10' 
-                                  : 'border-stone-50 dark:border-white/5 hover:bg-natural-subtle/50'
-                                }`}
-                              >
-                                <span className="text-xl">{env.icon}</span>
-                                <span className="text-xs font-semibold">{env.label}</span>
-                              </button>
-                            ))}
+                            <section>
+                              <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Environnement</label>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-1 gap-2">
+                                {[
+                                  { id: 'maison', label: 'À la maison', icon: '🏠' },
+                                  { id: 'typique', label: 'Salle standard', icon: '🏢' },
+                                  { id: 'professionnel', label: 'Salle pro / Club', icon: '💎' }
+                                ].map((env) => (
+                                  <button
+                                    key={env.id}
+                                    onClick={() => setFormData(prev => ({ ...prev, equipment: env.id as Equipment }))}
+                                    className={`flex items-center gap-4 p-3 rounded-2xl border transition-all ${
+                                      formData.equipment === env.id 
+                                      ? 'border-natural-accent bg-natural-subtle dark:bg-natural-accent/10' 
+                                      : 'border-stone-50 dark:border-white/5 hover:bg-natural-subtle/50'
+                                    }`}
+                                  >
+                                    <span className="text-xl">{env.icon}</span>
+                                    <span className="text-xs font-semibold">{env.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </section>
                           </div>
-                        </section>
-                      </div>
 
                       {/* Colonne Droite (Objectifs) */}
                       <div className="space-y-10">
@@ -743,17 +1079,20 @@ Le JSON doit être propre, sans texte avant ou après.`;
                       : `Programme pour ${profile.gender} (${profile.age} ans) • ${profile.experience}`}
                   </p>
                 </div>
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   onClick={generateWorkout}
                   disabled={loading}
-                  className="w-full md:w-auto bg-black text-natural-accent px-12 py-5 rounded-full font-black shadow-2xl hover:scale-105 transition-all active:scale-95 uppercase tracking-[0.25em] text-[11px] flex items-center justify-center gap-3 disabled:opacity-70 border border-natural-accent/20"
+                  aria-label={(!profile || showProfileEdit) ? "Continuer vers les options de séance" : "Générer mon pack d'entraînement personnalisé"}
+                  className="w-full md:w-auto bg-black text-natural-accent px-12 py-5 rounded-full font-black shadow-2xl transition-all uppercase tracking-[0.25em] text-[11px] flex items-center justify-center gap-3 disabled:opacity-70 border border-natural-accent/20"
                 >
                   {loading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     (!profile || showProfileEdit) ? "Valider mon profil" : "Bâtir mon programme"
                   )}
-                </button>
+                </motion.button>
               </div>
             </motion.div>
           )}
@@ -1300,13 +1639,16 @@ Le JSON doit être propre, sans texte avant ou après.`;
               className="bg-white dark:bg-natural-subtle rounded-[40px] shadow-2xl shadow-stone-200/50 dark:shadow-black/20 overflow-hidden transition-colors duration-300"
             >
               <div className="p-8 md:p-12 text-center md:text-left">
-                <button 
-                  onClick={reset}
-                  className="flex items-center gap-2 text-stone-400 hover:text-natural-accent transition-colors mb-8 group mx-auto md:mx-0"
+                <motion.button 
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setStep('info')}
+                  aria-label="Retour au profil"
+                  className="flex items-center gap-2 text-stone-400 hover:text-natural-accent transition-all mb-8 group mx-auto md:mx-0 bg-stone-100 dark:bg-white/5 px-4 py-2 rounded-full"
                 >
-                  <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-                  <span className="text-xs font-bold uppercase tracking-widest">Retour</span>
-                </button>
+                  <ChevronLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Retour au profil</span>
+                </motion.button>
 
                 <header className="mb-12 border-b border-stone-100 pb-10">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
@@ -1355,6 +1697,23 @@ Le JSON doit être propre, sans texte avant ou après.`;
                 </header>
 
                 <div className="space-y-4">
+                  {historyTab === 'sessions' && !user && (
+                    <div className="p-8 bg-natural-accent/5 border border-natural-accent/20 rounded-[32px] flex flex-col md:flex-row items-center justify-between gap-6 mb-12">
+                      <div className="flex items-center gap-4 text-center md:text-left">
+                        <CloudOff className="w-10 h-10 text-natural-accent opacity-50" />
+                        <div>
+                          <h3 className="font-bold text-sm uppercase tracking-widest mb-1">Tes données sont en Local</h3>
+                          <p className="text-xs text-stone-500 max-w-xs">Connecte-toi à Repz Cloud pour synchroniser ton historique sur tous tes appareils.</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={safeSignIn}
+                        className="px-8 py-4 bg-natural-accent text-black font-black text-[10px] uppercase tracking-[0.2em] rounded-full hover:scale-105 transition-all shadow-lg shadow-natural-accent/20 active:scale-95 whitespace-nowrap"
+                      >
+                        Synchroniser maintenant
+                      </button>
+                    </div>
+                  )}
                   {historyTab === 'sessions' ? (
                     history.length === 0 ? (
                       <div className="text-center py-20 grayscale opacity-30">
@@ -1698,6 +2057,62 @@ Le JSON doit être propre, sans texte avant ou après.`;
                       <span className="text-xs">by EL BOUZZAOUI</span>
                     </p>
       </footer>
+
+      {/* Loading Overlay */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-white/90 dark:bg-stone-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center"
+          >
+            <div className="w-full max-w-md space-y-12">
+              <div className="relative">
+                <div className="flex flex-col items-center gap-6">
+                  <div className="relative">
+                    <Dumbbell className="w-16 h-16 text-natural-accent animate-bounce" />
+                    <div className="absolute inset-0 bg-natural-accent/20 blur-2xl rounded-full" />
+                  </div>
+                  <h2 className="text-3xl font-black uppercase tracking-tighter italic">
+                    Génération du <span className="text-natural-accent">Repz</span>...
+                  </h2>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="h-2 w-full bg-stone-200 dark:bg-white/5 rounded-full overflow-hidden border border-stone-100 dark:border-white/5">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${loadingProgress}%` }}
+                    className="h-full bg-natural-accent shadow-[0_0_15px_rgba(202,255,51,0.5)]"
+                  />
+                </div>
+                <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-stone-400">
+                  <span>Analyse de ton profil</span>
+                  <span>{Math.round(loadingProgress)}%</span>
+                </div>
+              </div>
+
+              <motion.div 
+                key={triviaIndex}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="bg-stone-50 dark:bg-white/5 p-8 rounded-[32px] border border-stone-100 dark:border-white/10"
+              >
+                <div className="flex items-center justify-center gap-2 mb-4">
+                  <Zap className="w-4 h-4 text-natural-accent" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-natural-accent">Le saviez-vous ?</span>
+                </div>
+                <p className="text-lg md:text-xl font-serif italic text-stone-600 dark:text-stone-300 leading-relaxed">
+                  "{triviaFacts[triviaIndex]}"
+                </p>
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
