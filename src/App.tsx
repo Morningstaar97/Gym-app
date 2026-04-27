@@ -40,10 +40,7 @@ import {
   Minimize2,
   ChevronLeft,
   ChevronRight,
-  ClipboardList,
-  LogOut,
-  LogIn,
-  CloudOff
+  ClipboardList
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -60,61 +57,6 @@ import {
   CartesianGrid,
   Legend
 } from 'recharts';
-import { auth, db, signInWithGoogle } from './lib/firebase';
-import { 
-  onAuthStateChanged, 
-  signOut,
-  User as FirebaseUser 
-} from 'firebase/auth';
-import { 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  collection, 
-  query, 
-  orderBy, 
-  deleteDoc,
-  serverTimestamp,
-  getDocFromServer
-} from 'firebase/firestore';
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
 
 type Goal = 'perdrePoids' | 'prendreMuscle' | 'gagnerForce';
 type Intensity = 'faible' | 'modérée' | 'élevée';
@@ -176,8 +118,6 @@ const MUSCLE_GROUPS = [
 ];
 
 export default function App() {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const [step, setStep] = useState<'info' | 'workout' | 'history'>('info');
   const [loading, setLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
@@ -281,127 +221,17 @@ export default function App() {
 
   const [historyTab, setHistoryTab] = useState<'sessions' | 'favorites' | 'stats'>('sessions');
   const [focusedExerciseIndex, setFocusedExerciseIndex] = useState<number | null>(null);
-  // Centralized Error Handler for Firestore
-  const handleFirestoreError = (error: any, operationType: 'create' | 'update' | 'delete' | 'list' | 'get' | 'write', path: string | null) => {
-    const errInfo = {
-      error: error instanceof Error ? error.message : String(error),
-      authInfo: {
-        userId: auth.currentUser?.uid,
-        email: auth.currentUser?.email,
-        emailVerified: auth.currentUser?.emailVerified,
-      },
-      operationType,
-      path
-    };
-    console.error('Firestore Error:', JSON.stringify(errInfo));
-  };
 
   // Initialisation IA
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  // Initialisation Auth et Test Connection
+  // Initialisation et Test Connection
   useEffect(() => {
     const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if(error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration.");
-        }
-      }
+      // Test de connectivité (optionnel, on peut le garder pour vérifier si l'API Gemini est accessible par ex)
     };
     testConnection();
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
   }, []);
-
-  // Synchronisation avec Firestore
-  useEffect(() => {
-    if (authLoading) return;
-
-    if (!user) {
-      // Pas d'utilisateur : on recharge les données locales
-      const savedProfile = localStorage.getItem('repz_profile') || localStorage.getItem('fitfocus_profile');
-      if (savedProfile) setProfile(JSON.parse(savedProfile));
-      
-      const savedHistory = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
-      if (savedHistory) setHistory(JSON.parse(savedHistory));
-      
-      const savedFavs = localStorage.getItem('repz_favorites') || localStorage.getItem('fitfocus_favorites');
-      if (savedFavs) setFavorites(JSON.parse(savedFavs));
-      
-      return;
-    }
-
-    const syncData = async () => {
-      try {
-        // 1. Profil
-        const profileDocRef = doc(db, 'users', user.uid);
-        const profileDoc = await getDoc(profileDocRef);
-        
-        if (profileDoc.exists()) {
-          setProfile(profileDoc.data() as any);
-        } else {
-          // Migration: Si l'utilisateur n'a pas encore de profil sur Firestore, on l'upload
-          const localProfileStr = localStorage.getItem('repz_profile') || localStorage.getItem('fitfocus_profile');
-          if (localProfileStr) {
-            const profileData = JSON.parse(localProfileStr);
-            await setDoc(profileDocRef, { ...profileData, updatedAt: serverTimestamp() })
-              .catch(err => handleFirestoreError(err, 'write', `users/${user.uid}`));
-            setProfile(profileData);
-          }
-        }
-
-        // 2. Historique & Migration
-        const historyCollRef = collection(db, 'users', user.uid, 'history');
-        const historySnap = await getDocs(historyCollRef);
-        const remoteHistory = historySnap.docs.map(d => d.data() as WorkoutPlan);
-
-        if (remoteHistory.length === 0) {
-          // Migration de l'historique local vers Firestore
-          const localHistoryStr = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
-          if (localHistoryStr) {
-            const localHistory: WorkoutPlan[] = JSON.parse(localHistoryStr);
-            const uploadPromises = localHistory.map(w => 
-              setDoc(doc(historyCollRef, w.id), { ...w, createdAt: w.createdAt || serverTimestamp() })
-            );
-            await Promise.all(uploadPromises);
-            setHistory(localHistory);
-          }
-        } else {
-          // On trie par date si distant
-          const sortedRemote = [...remoteHistory].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          setHistory(sortedRemote);
-        }
-
-        // 3. Favoris & Migration
-        const favsCollRef = collection(db, 'users', user.uid, 'favorites');
-        const favsSnap = await getDocs(favsCollRef);
-        const remoteFavs = favsSnap.docs.map(d => d.data() as WorkoutPlan);
-
-        if (remoteFavs.length === 0) {
-          const localFavsStr = localStorage.getItem('repz_favorites');
-          if (localFavsStr) {
-            const localFavs: WorkoutPlan[] = JSON.parse(localFavsStr);
-            const uploadPromises = localFavs.map(w => setDoc(doc(favsCollRef, w.id), w));
-            await Promise.all(uploadPromises);
-            setFavorites(localFavs);
-          }
-        } else {
-          setFavorites(remoteFavs);
-        }
-
-      } catch (err) {
-        console.error("Erreur lors de la synchronisation Firestore:", err);
-      }
-    };
-
-    syncData();
-  }, [user]);
 
   // Sauvegarder automatiquement les champs du profil dans localStorage en temps réel
   useEffect(() => {
@@ -415,13 +245,6 @@ export default function App() {
       focus: formData.focus
     };
     localStorage.setItem('repz_profile', JSON.stringify(profileToSave));
-
-    if (user && formData.firstName && formData.age) {
-       setDoc(doc(db, 'users', user.uid), {
-         ...profileToSave,
-         updatedAt: serverTimestamp()
-       }, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`));
-    }
   }, [
     formData.firstName, 
     formData.age, 
@@ -429,8 +252,7 @@ export default function App() {
     formData.experience, 
     formData.equipment, 
     formData.goal, 
-    formData.focus,
-    user
+    formData.focus
   ]);
 
   // Sauvegarder l'historique et les favoris quand ils changent
@@ -454,18 +276,6 @@ export default function App() {
         ? prev.targetMuscles.filter(m => m !== muscle)
         : [...prev.targetMuscles, muscle]
     }));
-  };
-
-  const safeSignIn = async () => {
-    try {
-      await signInWithGoogle();
-    } catch (err: any) {
-      if (err.code === 'auth/popup-closed-by-user') {
-        console.log("Connexion annulée par l'utilisateur.");
-        return;
-      }
-      console.error("Erreur de connexion:", err);
-    }
   };
 
   const generateWorkout = async () => {
@@ -613,26 +423,18 @@ Le JSON doit être propre, sans texte avant ou après.`;
     setWorkout({ ...workout, exercises: updatedExercises });
   };
 
-  const toggleFavorite = async () => {
+  const toggleFavorite = () => {
     if (!workout) return;
     const isFav = favorites.some(f => f.id === workout.id);
     if (isFav) {
       setFavorites(prev => prev.filter(f => f.id !== workout.id));
-      if (user) {
-        await deleteDoc(doc(db, 'users', user.uid, 'favorites', workout.id))
-          .catch(err => handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/favorites/${workout.id}`));
-      }
     } else {
       const newFav = { ...workout, isFavorite: true };
       setFavorites(prev => [...prev, newFav]);
-      if (user) {
-        await setDoc(doc(db, 'users', user.uid, 'favorites', workout.id), newFav)
-          .catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/favorites/${workout.id}`));
-      }
     }
   };
 
-  const finishSession = async () => {
+  const finishSession = () => {
     if (!workout) return;
     
     // Calculer les stats de session
@@ -672,17 +474,10 @@ Le JSON doit être propre, sans texte avant ou après.`;
         hour: '2-digit',
         minute: '2-digit'
       }),
-      createdAt: new Date().toISOString() // ISO string for local history, Firestore uses serverTimestamp
+      createdAt: new Date().toISOString()
     };
 
     setHistory(prev => [completedWorkout, ...prev]);
-
-    if (user) {
-      await setDoc(doc(db, 'users', user.uid, 'history', completedWorkout.id), {
-        ...completedWorkout,
-        createdAt: serverTimestamp()
-      }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/history/${completedWorkout.id}`));
-    }
 
     setStep('history');
     setFocusedExerciseIndex(null);
@@ -758,13 +553,9 @@ Le JSON doit être propre, sans texte avant ou après.`;
     }
   };
 
-  const deleteFromHistory = async (id: string, e: React.MouseEvent) => {
+  const deleteFromHistory = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setHistory(prev => prev.filter(w => w.id !== id));
-    if (user) {
-      await deleteDoc(doc(db, 'users', user.uid, 'history', id))
-        .catch(err => handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/history/${id}`));
-    }
   };
 
   return (
@@ -790,40 +581,12 @@ Le JSON doit être propre, sans texte avant ou après.`;
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            {authLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-stone-400" />
-            ) : user ? (
-              <div className="flex items-center gap-3">
-                <div className="hidden md:flex flex-col items-end">
-                  <span className="text-[8px] font-black uppercase tracking-widest text-natural-accent">Sync Cloud Active</span>
-                  <span className="text-[10px] font-bold opacity-60 truncate max-w-[120px]">{user.displayName || user.email}</span>
-                </div>
-                {user.photoURL && (
-                  <img src={user.photoURL} alt={user.displayName || ''} className="w-8 h-8 rounded-full border border-natural-accent/30 shadow-[0_0_10px_rgba(202,255,51,0.2)]" referrerPolicy="no-referrer" />
-                )}
-                <button 
-                  onClick={() => signOut(auth)}
-                  className="group flex items-center gap-2 p-2 hover:bg-red-500/10 rounded-full transition-all"
-                  title="Se déconnecter"
-                >
-                  <LogOut className="w-5 h-5 text-stone-400 group-hover:text-red-500" />
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
+             <div className="flex items-center gap-2">
                 <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 bg-stone-100 dark:bg-white/5 border border-stone-200 dark:border-white/10 rounded-full text-[9px] font-black uppercase tracking-widest text-stone-400">
                   <div className="w-1 h-1 bg-stone-400 rounded-full" />
-                  Mode Invité
+                  Stockage Local Uniquement
                 </span>
-                <button 
-                  onClick={safeSignIn}
-                  className="flex items-center gap-2 px-4 py-2 bg-natural-accent text-black font-bold rounded-full text-[10px] uppercase tracking-widest hover:scale-105 transition-all shadow-lg shadow-natural-accent/30 active:scale-95"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>Connexion</span>
-                </button>
               </div>
-            )}
           </div>
         </div>
       </div>
@@ -1146,6 +909,7 @@ Le JSON doit être propre, sans texte avant ou après.`;
                                    href={workout.exercises[focusedExerciseIndex].youtubeUrl} 
                                    target="_blank" 
                                    rel="noreferrer"
+                                   aria-label="Voir la vidéo de démonstration sur YouTube"
                                    className="px-4 md:px-6 py-2 md:py-3 bg-red-500 text-white rounded-full font-bold text-[9px] md:text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
                                  >
                                    <Youtube className="w-4 h-4" /> Vidéo
@@ -1156,6 +920,7 @@ Le JSON doit être propre, sans texte avant ou après.`;
                                    href={workout.exercises[focusedExerciseIndex].googleImageUrl} 
                                    target="_blank" 
                                    rel="noreferrer"
+                                   aria-label="Voir des images de démonstration sur Google"
                                    className="px-4 md:px-6 py-2 md:py-3 bg-blue-500 text-white rounded-full font-bold text-[9px] md:text-xs uppercase tracking-widest flex items-center gap-2 hover:bg-blue-600 transition-all shadow-lg shadow-blue-500/20"
                                  >
                                    <ImageIcon className="w-4 h-4" /> Image
@@ -1697,23 +1462,6 @@ Le JSON doit être propre, sans texte avant ou après.`;
                 </header>
 
                 <div className="space-y-4">
-                  {historyTab === 'sessions' && !user && (
-                    <div className="p-8 bg-natural-accent/5 border border-natural-accent/20 rounded-[32px] flex flex-col md:flex-row items-center justify-between gap-6 mb-12">
-                      <div className="flex items-center gap-4 text-center md:text-left">
-                        <CloudOff className="w-10 h-10 text-natural-accent opacity-50" />
-                        <div>
-                          <h3 className="font-bold text-sm uppercase tracking-widest mb-1">Tes données sont en Local</h3>
-                          <p className="text-xs text-stone-500 max-w-xs">Connecte-toi à Repz Cloud pour synchroniser ton historique sur tous tes appareils.</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={safeSignIn}
-                        className="px-8 py-4 bg-natural-accent text-black font-black text-[10px] uppercase tracking-[0.2em] rounded-full hover:scale-105 transition-all shadow-lg shadow-natural-accent/20 active:scale-95 whitespace-nowrap"
-                      >
-                        Synchroniser maintenant
-                      </button>
-                    </div>
-                  )}
                   {historyTab === 'sessions' ? (
                     history.length === 0 ? (
                       <div className="text-center py-20 grayscale opacity-30">
@@ -1773,6 +1521,7 @@ Le JSON doit être propre, sans texte avant ou après.`;
                             </div>
                             <button 
                               onClick={(e) => deleteFromHistory(h.id, e)}
+                              aria-label="Supprimer de l'historique"
                               className="p-2 text-stone-400 hover:text-red-500 transition-colors"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1816,6 +1565,7 @@ Le JSON doit être propre, sans texte avant ou après.`;
                                 e.stopPropagation();
                                 setFavorites(prev => prev.filter(fav => fav.id !== f.id));
                               }}
+                              aria-label="Supprimer des favoris"
                               className="p-2 text-stone-400 hover:text-red-500 transition-colors"
                             >
                               <Trash2 className="w-4 h-4" />
