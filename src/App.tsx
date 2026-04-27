@@ -75,6 +75,7 @@ interface UserData {
   duration: string;
   intensity: Intensity;
   goal: Goal;
+  includeBodyweight: boolean;
 }
 
 interface Exercise {
@@ -206,6 +207,7 @@ export default function App() {
     targetMuscles: [],
     duration: '30',
     intensity: 'modérée',
+    includeBodyweight: true,
   });
 
   // Mettre à jour formData quand le profil change
@@ -317,6 +319,7 @@ Génère un programme d'entraînement PERSONNALISÉ et ÉQUILIBRÉ en respectant
 - Objectif : ${formData.goal}
 - Équipement : ${formData.equipment}
 - Séance : ${formData.duration} minutes, Intensité ${formData.intensity}
+- Exercices au poids du corps (pompes, tractions, dips) : ${formData.includeBodyweight ? 'OUI, à inclure' : 'NON, ne pas inclure'}
 - Muscles cibles : ${formData.targetMuscles.join(', ') || 'Corps complet'}
 
 Réponds UNIQUEMENT avec un objet JSON valide suivant ce schéma exact :
@@ -790,6 +793,34 @@ Le JSON doit être propre, sans texte avant ou après.`;
                       </div>
 
                       <div className="space-y-10">
+                        <section>
+                          <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Préférence Exercices</label>
+                          <button
+                            onClick={() => setFormData(prev => ({ ...prev, includeBodyweight: !prev.includeBodyweight }))}
+                            className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                              formData.includeBodyweight 
+                              ? 'border-natural-accent bg-natural-accent/10' 
+                              : 'border-stone-100 dark:border-white/5 bg-white dark:bg-white/5'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${formData.includeBodyweight ? 'bg-natural-accent text-black' : 'bg-stone-100 dark:bg-stone-800 text-stone-400'}`}>
+                                💪
+                              </div>
+                              <div className="text-left">
+                                <p className="text-xs font-bold uppercase tracking-widest">Poids du corps</p>
+                                <p className="text-[10px] text-stone-500">Inclure pompes, tractions, dips...</p>
+                              </div>
+                            </div>
+                            <div className={`w-12 h-6 rounded-full relative transition-colors ${formData.includeBodyweight ? 'bg-natural-accent' : 'bg-stone-200 dark:bg-stone-700'}`}>
+                              <motion.div 
+                                animate={{ x: formData.includeBodyweight ? 24 : 4 }}
+                                className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </div>
+                          </button>
+                        </section>
+
                         <section>
                           <label className="block text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500 dark:text-stone-400 mb-4">Durée & Intensité</label>
                           <div className="space-y-6">
