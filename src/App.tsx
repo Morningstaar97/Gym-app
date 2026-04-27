@@ -110,6 +110,8 @@ interface WorkoutPlan {
   avgRpe?: string;
   volume?: number;
   createdAt?: string | any; // Any for FieldValue
+  rating?: number;
+  feedbackComment?: string;
 }
 
 const MUSCLE_GROUPS = [
@@ -166,6 +168,9 @@ export default function App() {
 
   const [loadingAlternative, setLoadingAlternative] = useState<number | null>(null);
   const [workout, setWorkout] = useState<WorkoutPlan | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [currentRating, setCurrentRating] = useState(0);
+  const [currentFeedback, setCurrentFeedback] = useState('');
   const [history, setHistory] = useState<WorkoutPlan[]>(() => {
     const saved = localStorage.getItem('repz_history') || localStorage.getItem('fitfocus_history');
     return saved ? JSON.parse(saved) : [];
@@ -466,10 +471,12 @@ Le JSON doit être propre, sans texte avant ou après.`;
 
     const averageRpe = setsWithRpe > 0 ? (rpeSum / setsWithRpe).toFixed(1) : null;
 
-    const completedWorkout = {
+    const completedWorkout: WorkoutPlan = {
       ...workout,
       volume: totalVolume,
       avgRpe: averageRpe,
+      rating: currentRating,
+      feedbackComment: currentFeedback,
       date: new Date().toLocaleDateString('fr-FR', { 
         day: '2-digit', 
         month: 'long', 
@@ -484,6 +491,8 @@ Le JSON doit être propre, sans texte avant ou après.`;
 
     setStep('history');
     setFocusedExerciseIndex(null);
+    setCurrentRating(0);
+    setCurrentFeedback('');
   };
 
   const reset = () => {
@@ -508,29 +517,26 @@ Le JSON doit être propre, sans texte avant ou après.`;
     setLoadingAlternative(index);
     try {
       const prompt = `
-        Tu es un coach de fitness professionnel. L'utilisateur ne peut pas faire l'exercice suivant : "${exercise.name}".
-        Propose un exercice ALTERNATIF qui travaille les mêmes muscles, adapté au niveau "${formData.experience}" et à l'équipement "${formData.equipment}".
+        Tu es un coach de fitness expert. L'utilisateur ne peut pas faire : "${exercise.name}".
+        Propose RAPIDEMENT un exercice ALTERNATIF (muscles identiques), niveau "${formData.experience}", équipement "${formData.equipment}".
         
-        Paramètres du profil :
-        - Genre : ${formData.gender}
-        - Âge : ${formData.age}
-        - Équipement disponible : ${formData.equipment}
+        Paramètres : ${formData.gender}, ${formData.age} ans, équipement: ${formData.equipment}.
 
-        Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
+        Réponds UNIQUEMENT avec un JSON CONCIS :
         {
-          "name": "Nom du nouvel exercice", 
+          "name": "Nom", 
           "sets": "${exercise.sets}", 
           "reps": "${exercise.reps}", 
-          "notes": "astuce courte",
-          "form": "Explication de la forme correcte",
-          "modifications": "Adaptations",
-          "youtubeUrl": "Lien YouTube : https://www.youtube.com/results?search_query=Nom+de+l'exercice+form",
-          "googleImageUrl": "Lien Google Images : https://www.google.com/search?tbm=isch&q=Nom+de+l'exercice+demonstration"
+          "notes": "Conseil bref",
+          "form": "Technique courte",
+          "modifications": "Variante",
+          "youtubeUrl": "https://www.youtube.com/results?search_query=Nom+de+l'exercice+form",
+          "googleImageUrl": "https://www.google.com/search?tbm=isch&q=Nom+de+l'exercice+demonstration"
         }
       `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.1-flash-lite-preview",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -1413,14 +1419,45 @@ Le JSON doit être propre, sans texte avant ou après.`;
                   )}
                 </div>
 
-                <div className="mt-20 flex flex-col items-center">
-                  <button 
-                    onClick={finishSession}
-                    className="bg-natural-accent text-black px-16 py-6 rounded-full font-black shadow-[0_0_30px_rgba(202,255,51,0.4)] hover:scale-105 active:scale-95 transition-all transition-all uppercase tracking-[0.3em] text-[11px] mb-4"
-                  >
-                    Séance Terminée
-                  </button>
-                  <p className="text-stone-500 dark:text-stone-400 text-[11px] font-bold uppercase tracking-widest">Enregistrer & Quitter</p>
+                <div className="mt-20 space-y-12 flex flex-col items-center">
+                  <div className="w-full max-w-lg bg-stone-50 dark:bg-white/5 rounded-[40px] border border-stone-100 dark:border-white/10 p-8 md:p-10 shadow-sm">
+                    <div className="text-center mb-8">
+                       <Award className="w-10 h-10 text-natural-accent mx-auto mb-4 opacity-50" />
+                       <h3 className="text-xl md:text-2xl font-serif font-medium text-natural-accent mb-2">Notez ce programme</h3>
+                       <p className="text-[10px] text-stone-500 dark:text-stone-400 uppercase tracking-[0.2em] font-black">Aidez Repz AI à s'améliorer</p>
+                    </div>
+
+                    <div className="flex justify-center gap-3 mb-8">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <motion.button
+                          key={star}
+                          whileHover={{ scale: 1.2 }}
+                          whileTap={{ scale: 0.9 }}
+                          onClick={() => setCurrentRating(star)}
+                          className={`p-1 transition-all ${currentRating >= star ? 'text-yellow-400' : 'text-stone-200 dark:text-stone-800 hover:text-stone-300'}`}
+                        >
+                          <Star className={`w-8 h-8 md:w-10 md:h-10 ${currentRating >= star ? 'fill-current' : ''}`} />
+                        </motion.button>
+                      ))}
+                    </div>
+
+                    <textarea
+                      value={currentFeedback}
+                      onChange={(e) => setCurrentFeedback(e.target.value)}
+                      placeholder="Commentaire optionnel... (ex: trop dur, manque d'équilibre, super exercices !)"
+                      className="w-full bg-white dark:bg-black/20 border border-stone-200 dark:border-white/10 rounded-2xl p-4 text-xs md:text-sm focus:border-natural-accent outline-none transition-all resize-none h-24 placeholder:text-stone-300 dark:placeholder:text-stone-700"
+                    />
+                  </div>
+
+                  <div className="flex flex-col items-center">
+                    <button 
+                      onClick={finishSession}
+                      className="bg-natural-accent text-black px-16 py-6 rounded-full font-black shadow-[0_0_30px_rgba(202,255,51,0.4)] hover:scale-105 active:scale-95 transition-all uppercase tracking-[0.3em] text-[11px] mb-4"
+                    >
+                      Séance Terminée
+                    </button>
+                    <p className="text-stone-500 dark:text-stone-400 text-[11px] font-bold uppercase tracking-widest">Enregistrer & Quitter</p>
+                  </div>
                 </div>
               </div>
             </motion.div>
